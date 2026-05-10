@@ -64,16 +64,13 @@ export function getMonthPillar(yearStem: TianGan, monthIndex: number): Pillar {
  * 计算日柱
  *
  * 原理：儒略日数 (JDN) 与六十甲子的固定映射关系
- * 天文学已知：JDN = 0 对应辛亥日（六十甲子序号 47）
- * 通用公式：甲子序号 = (JDN + 47) % 60
+ * 通用公式：甲子序号 = (JDN + 49) % 60
  *
- * 等价地，以 2000-01-01 (JDN=2451544) 为基准：
- * 2000-01-01 = 乙卯日（甲子序号 51）
+ * 已通过百度百科《日干支推算表》中 11 个日期交叉验证。
  */
 export function getDayPillar(year: number, month: number, day: number): Pillar {
-  // (JDN + 47) % 60 等价于 ((JDN - 2451544 + 51) % 60)
   const jdn = getJulianDayNumber(year, month, day);
-  const index = ((jdn + 47) % 60 + 60) % 60;
+  const index = ((jdn + 49) % 60 + 60) % 60;
   const stemIdx = index % 10;
   const branchIdx = index % 12;
 
@@ -85,7 +82,7 @@ export function getDayPillar(year: number, month: number, day: number): Pillar {
 
 /**
  * 计算儒略日数（Julian Day Number）
- * 使用标准公式，返回整数 JDN
+ * 使用标准公式，返回整数 JDN（正午对应的整数编号）
  */
 export function getJulianDayNumber(year: number, month: number, day: number): number {
   let y = year;
@@ -97,7 +94,7 @@ export function getJulianDayNumber(year: number, month: number, day: number): nu
   const A = Math.floor(y / 100);
   const B = 2 - A + Math.floor(A / 4);
   const jd = Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (m + 1)) + day + B - 1524.5;
-  return Math.floor(jd);
+  return Math.floor(jd + 0.5);
 }
 
 // ============================================================
