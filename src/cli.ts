@@ -1,24 +1,25 @@
 #!/usr/bin/env node
 // ============================================================
 // FateRead - CLI Entry Point
+// Supports: AI mode, offline mode, session resume, streaming
 // ============================================================
 
 import { config } from 'dotenv';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-// 加载项目根目录的 .env 文件
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// 支持从 dist/ 或 src/ 运行，都能找到根目录的 .env
 const envPath = resolve(__dirname, '..', '.env');
 config({ path: envPath });
 
 import { createInterface } from 'readline';
 import { FateReadAgent } from './agent/agent.js';
+import type { StreamEvent } from './agent/agent.js';
 import { paipan, formatChart } from './core/index.js';
 import type { PaipanInput } from './core/types.js';
 import { CITY_LONGITUDE } from './core/solar-time.js';
+import { listSessions, deleteSession } from './shared/session-store.js';
 
 const BANNER = `
 ╔══════════════════════════════════════════════════════╗
@@ -37,7 +38,7 @@ const BANNER = `
 ║     ██║  ██║███████╗██║  ██║██████╔╝                 ║
 ║     ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝                 ║
 ║                                                      ║
-║     AI 八字命理排盘解读系统 v0.1.0                     ║
+║     AI 八字命理排盘解读系统 v0.2.0                     ║
 ║                                                      ║
 ╚══════════════════════════════════════════════════════╝
 `;
@@ -47,6 +48,11 @@ const HELP = `
   /help          显示帮助信息
   /paipan        直接排盘（无需 AI，快速查看命盘）
   /reset         重置对话
+  /save [id]     保存当前会话（可选指定会话名）
+  /load <id>     加载之前保存的会话
+  /sessions      列出所有保存的会话
+  /tokens        查看 Token 使用统计
+  /stream        切换流式输出模式（默认开启）
   /quit          退出程序
 
 使用方式：
@@ -59,13 +65,22 @@ const HELP = `
 async function main() {
   const args = process.argv.slice(2);
 
-  // --offline 模式：仅排盘，不需要 API
+  // --offline mode
   if (args.includes('--offline') || args.includes('-o')) {
     await offlineMode();
     return;
   }
 
-  // 检查 API Key
+  // --stream / --no-stream flags
+  const useStream = !args.includes('--no-stream');
+
+  // --resume flag
+  const resumeIdx = args.indexOf('--resume');
+  let resumeId: string | null = null;
+  if (resumeIdx !== -1 && resumeIdx + 1 < args.length) {
+    resumeId = args[resumeIdx + 1];
+  }
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     console.log(BANNER);
@@ -74,13 +89,10 @@ async function main() {
     console.log('   OPENAI_API_KEY=your_deepseek_api_key\n');
     console.log('   或使用 --offline 模式仅进行排盘（无 AI 解读）：');
     console.log('   $ fateread --offline\n');
-
-    // 进入离线模式
     await offlineMode();
     return;
   }
 
-  // 完整模式（含 AI 解读）
   console.log(BANNER);
   console.log('✨ AI 模式已启用，输入出生信息开始解读命盘');
   console.log('   输入 /help 查看帮助\n');
@@ -90,6 +102,18 @@ async function main() {
     baseUrl: process.env.OPENAI_BASE_URL,
     model: process.env.FATEREAD_MODEL,
   });
+
+  // Resume session if requested
+  if (resumeId) {
+    const loaded = agent.loadSession(resumeId);
+    if (loaded) {
+      console.log(`📂 已恢复会话: ${resumeId}\n`);
+    } else {
+      console.log(`⚠️  未找到会话: ${resumeId}，开始新会话\n`);
+    }
+  }
+
+  let streamMode = useStream;
 
   const rl = createInterface({
     input: process.stdin,
@@ -106,33 +130,126 @@ async function main() {
       return;
     }
 
-    // 命令处理
+    // Commands
     if (input === '/quit' || input === '/exit' || input === '/q') {
-      console.log('\n再见！祝您好运！🙏\n');
+      console.log('\n再见！祝您好运！\n');
       process.exit(0);
     }
+
     if (input === '/help' || input === '/h') {
       console.log(HELP);
       rl.prompt();
       return;
     }
+
     if (input === '/reset') {
       agent.reset();
       console.log('\n对话已重置。\n');
       rl.prompt();
       return;
     }
+
+    if (input === '/tokens') {
+      console.log('\n' + agent.getTokenReport() + '\n');
+      rl.prompt();
+      return;
+    }
+
+    if (input.startsWith('/save')) {
+      const customId = input.split(/\s+/)[1] || undefined;
+      const filepath = agent.saveSession(customId);
+      console.log(`\n💾 会话已保存: ${filepath}\n`);
+      rl.prompt();
+      return;
+    }
+
+    if (input.startsWith('/load')) {
+      const sessionId = input.split(/\s+/)[1];
+      if (!sessionId) {
+        console.log('\n⚠️  用法: /load <会话ID>\n');
+        rl.prompt();
+        return;
+      }
+      const loaded = agent.loadSession(sessionId);
+      console.log(loaded ? `\n📂 已恢复会话: ${sessionId}\n` : `\n⚠️  未找到会话: ${sessionId}\n`);
+      rl.prompt();
+      return;
+    }
+
+    if (input === '/sessions') {
+      const sessions = listSessions();
+      if (sessions.length === 0) {
+        console.log('\n📭 没有保存的会话\n');
+      } else {
+        console.log('\n📂 已保存的会话:\n');
+        for (const s of sessions) {
+          console.log(`  ${s.id} — ${s.messageCount} 条消息 — ${s.updatedAt}`);
+        }
+        console.log('');
+      }
+      rl.prompt();
+      return;
+    }
+
+    if (input === '/stream') {
+      streamMode = !streamMode;
+      console.log(`\n📡 流式输出: ${streamMode ? '开启' : '关闭'}\n`);
+      rl.prompt();
+      return;
+    }
+
     if (input === '/paipan') {
       await interactivePaipan();
       rl.prompt();
       return;
     }
 
-    // AI 对话
+    // AI conversation
     try {
-      console.log('\n命理师> 思考中...\n');
-      const response = await agent.chat(input);
-      console.log(`命理师> ${response}\n`);
+      process.stdout.write('\n命理师> ');
+
+      if (streamMode) {
+        let thinkingShown = false;
+        for await (const event of agent.chatStream(input)) {
+          switch (event.type) {
+            case 'reasoning':
+              if (!thinkingShown) {
+                process.stdout.write('\n💭 思考中...\n');
+                thinkingShown = true;
+              }
+              break;
+            case 'tool_start':
+              process.stdout.write(`\n⚙️  ${event.content}...`);
+              break;
+            case 'tool_end':
+              if (event.data?.formatted) {
+                process.stdout.write(`\n${event.data.formatted}\n`);
+              } else if (event.data?.agreementRate !== undefined) {
+                process.stdout.write(`\n🎭 三派会诊完成 | 一致率: ${event.data.agreementRate}%\n`);
+              } else if (event.data?.progress) {
+                const progress = event.data.progress as Record<string, unknown>;
+                process.stdout.write(`\n📋 ${progress.completeness || '更新完成'}\n`);
+              } else if (event.data?.filepath) {
+                process.stdout.write(`\n💾 已保存: ${event.data.filepath}\n`);
+              }
+              break;
+            case 'text':
+              process.stdout.write(event.content);
+              break;
+            case 'progress':
+              process.stdout.write(`\n${event.content}\n`);
+              break;
+            case 'error':
+              process.stdout.write(`\n❌ ${event.content}\n`);
+              break;
+          }
+        }
+        process.stdout.write('\n');
+      } else {
+        process.stdout.write('思考中...\n');
+        const response = await agent.chat(input);
+        process.stdout.write(`\n${response}\n`);
+      }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       console.error(`\n❌ 错误: ${msg}\n`);
@@ -147,9 +264,10 @@ async function main() {
   });
 }
 
-/**
- * 离线模式：纯排盘
- */
+// ============================================================
+// Offline Mode
+// ============================================================
+
 async function offlineMode() {
   console.log(BANNER);
   console.log('📋 离线排盘模式（无 AI 解读）');
@@ -213,10 +331,7 @@ async function offlineMode() {
   process.exit(0);
 }
 
-/**
- * 交互式排盘
- */
-async function interactivePaipan() {
+function interactivePaipan() {
   console.log('\n此功能请使用 --offline 模式运行\n');
 }
 

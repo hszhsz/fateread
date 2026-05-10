@@ -1,6 +1,6 @@
 // ============================================================
 // FateRead - Debate Protocol (辩论协调机制)
-// 当三个流派出现分歧时，主持辩论并达成共识
+// Optimized: single-round debate, shared JSON parsing, client reuse
 // ============================================================
 
 import OpenAI from 'openai';
@@ -16,51 +16,38 @@ import type {
   SchoolAgentOptions,
 } from './types.js';
 import { SCHOOL_NAMES } from './types.js';
+import { safeJsonParse } from '../../shared/json-utils.js';
+import { createLlmClient, extractContent } from '../../shared/llm-client.js';
+import type { TokenTracker } from '../../shared/llm-client.js';
+import { recordUsage } from '../../shared/llm-client.js';
 
-/**
- * 辩论协调器配置
- */
 export interface DebateConfig {
-  /** 触发辩论的信心度差异阈值（默认30） */
   confidenceThreshold: number;
-  /** 触发辩论的结论相似度阈值（0-1，低于此值触发辩论） */
   similarityThreshold: number;
-  /** 最大辩论轮次 */
   maxRounds: number;
-  /** 是否记录辩论过程 */
   verbose: boolean;
 }
 
 const DEFAULT_CONFIG: DebateConfig = {
   confidenceThreshold: 30,
   similarityThreshold: 0.5,
-  maxRounds: 2,
+  maxRounds: 1, // Optimized: single round is usually sufficient
   verbose: true,
 };
 
-/**
- * 辩论协调器
- *
- * 工作流程：
- * 1. 收集三个流派的独立分析报告
- * 2. 对比各维度的结论，识别分歧点
- * 3. 对有分歧的维度启动辩论
- * 4. 由"裁判 LLM"综合各方观点达成共识
- */
 export class DebateProtocol {
   private config: DebateConfig;
+  private sharedClient?: OpenAI;
+  tokenTracker?: TokenTracker;
 
-  constructor(config: Partial<DebateConfig> = {}) {
+  constructor(config: Partial<DebateConfig> = {}, sharedClient?: OpenAI) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.sharedClient = sharedClient;
   }
 
-  /**
-   * 识别需要辩论的维度
-   */
   identifyDisagreements(reports: SchoolReport[]): AnalysisDimension[] {
     const disagreedDimensions: AnalysisDimension[] = [];
 
-    // 收集所有维度
     const allDimensions = new Set<AnalysisDimension>();
     for (const report of reports) {
       for (const analysis of report.analyses) {
@@ -68,7 +55,6 @@ export class DebateProtocol {
       }
     }
 
-    // 逐维度检查分歧
     for (const dim of allDimensions) {
       const analyses = reports
         .map(r => r.analyses.find(a => a.dimension === dim))
@@ -76,7 +62,7 @@ export class DebateProtocol {
 
       if (analyses.length < 2) continue;
 
-      // 检查信心度差异
+      // Confidence gap check
       const confidences = analyses.map(a => a.confidence);
       const maxConf = Math.max(...confidences);
       const minConf = Math.min(...confidences);
@@ -85,7 +71,7 @@ export class DebateProtocol {
         continue;
       }
 
-      // 检查结论相似度（简单的关键词重叠法）
+      // Keyword overlap check
       const keywordSets = analyses.map(a => new Set(a.keywords));
       let minSimilarity = 1;
       for (let i = 0; i < keywordSets.length; i++) {
@@ -103,8 +89,84 @@ export class DebateProtocol {
   }
 
   /**
-   * 主持一个维度的辩论
+   * Conduct debate for ALL disputed dimensions with a single batch judge call.
+   * Optimized: single debate round, single judge synthesis for all dimensions.
    */
+  async conductAllDebates(
+    dimensions: AnalysisDimension[],
+    reports: SchoolReport[],
+    agents: SchoolAgent[],
+    chart: BaziChart,
+    options: SchoolAgentOptions = {},
+  ): Promise<DebateConsensus[]> {
+    if (dimensions.length === 0) return [];
+
+    const allInitialStatements: Map<AnalysisDimension, DebateStatement[]> = new Map();
+
+    // Single round: collect all statements for all dimensions
+    for (const dim of dimensions) {
+      if (this.config.verbose) {
+        console.log(`\n🏛️  开始辩论: ${dim} 维度`);
+      }
+
+      const statements: DebateStatement[] = [];
+      for (const report of reports) {
+        const analysis = report.analyses.find(a => a.dimension === dim);
+        if (analysis && analysis.confidence > 0) {
+          statements.push({
+            schoolId: report.schoolId,
+            dimension: dim,
+            position: analysis.conclusion,
+            evidence: analysis.reasoning,
+          });
+        }
+      }
+      allInitialStatements.set(dim, statements);
+
+      if (this.config.verbose) {
+        for (const stmt of statements) {
+          console.log(`  📣 ${SCHOOL_NAMES[stmt.schoolId]}：${stmt.position.slice(0, 50)}...`);
+        }
+      }
+    }
+
+    // Single round of counter-arguments
+    for (const dim of dimensions) {
+      if (this.config.verbose) console.log(`  🔄 辩论 (单轮)...`);
+
+      const initialStatements = allInitialStatements.get(dim) || [];
+
+      for (const agent of agents) {
+        const ownAnalysis = reports
+          .find(r => r.schoolId === agent.id)
+          ?.analyses.find(a => a.dimension === dim);
+
+        if (!ownAnalysis || ownAnalysis.confidence === 0) continue;
+
+        const otherPositions = initialStatements.filter(s => s.schoolId !== agent.id);
+        if (otherPositions.length === 0) continue;
+
+        const statement = await agent.debate(dim, ownAnalysis, otherPositions, chart, options);
+        // Append to statements
+        const dimStatements = allInitialStatements.get(dim) || [];
+        dimStatements.push({ ...statement, dimension: dim });
+        allInitialStatements.set(dim, dimStatements);
+      }
+    }
+
+    // Batch judge: one LLM call for all dimensions
+    const allConsensuses = await this.batchSynthesize(dimensions, allInitialStatements, options);
+
+    if (this.config.verbose) {
+      for (const c of allConsensuses) {
+        console.log(`  ✅ ${c.dimension}: ${c.consensus.slice(0, 60)}... (信心度: ${c.confidence}%)`);
+      }
+    }
+
+    return allConsensuses;
+  }
+
+  // Keep the single-dimension method for backward compat
   async conductDebate(
     dimension: AnalysisDimension,
     reports: SchoolReport[],
@@ -112,124 +174,65 @@ export class DebateProtocol {
     chart: BaziChart,
     options: SchoolAgentOptions = {},
   ): Promise<DebateConsensus> {
-    if (this.config.verbose) {
-      console.log(`\n🏛️  开始辩论: ${dimension} 维度`);
-    }
-
-    // 第一轮：各流派陈述立场
-    const initialStatements: DebateStatement[] = [];
-    for (const report of reports) {
-      const analysis = report.analyses.find(a => a.dimension === dimension);
-      if (analysis && analysis.confidence > 0) {
-        initialStatements.push({
-          schoolId: report.schoolId,
-          dimension,
-          position: analysis.conclusion,
-          evidence: analysis.reasoning,
-        });
-      }
-    }
-
-    if (this.config.verbose) {
-      for (const stmt of initialStatements) {
-        console.log(`  📣 ${SCHOOL_NAMES[stmt.schoolId]}：${stmt.position.slice(0, 50)}...`);
-      }
-    }
-
-    // 第二轮：各流派看到对方观点后辩论
-    const debateStatements: DebateStatement[] = [];
-    for (let round = 0; round < this.config.maxRounds; round++) {
-      if (this.config.verbose) {
-        console.log(`  🔄 辩论第 ${round + 1} 轮...`);
-      }
-
-      for (const agent of agents) {
-        const ownAnalysis = reports
-          .find(r => r.schoolId === agent.id)
-          ?.analyses.find(a => a.dimension === dimension);
-
-        if (!ownAnalysis || ownAnalysis.confidence === 0) continue;
-
-        const otherPositions = (round === 0 ? initialStatements : debateStatements)
-          .filter(s => s.schoolId !== agent.id);
-
-        if (otherPositions.length === 0) continue;
-
-        const statement = await agent.debate(
-          dimension, ownAnalysis, otherPositions, chart, options,
-        );
-        debateStatements.push(statement);
-      }
-    }
-
-    // 裁判综合各方观点
-    const consensus = await this.synthesize(
-      dimension, initialStatements, debateStatements, options,
-    );
-
-    if (this.config.verbose) {
-      console.log(`  ✅ 共识达成: ${consensus.consensus.slice(0, 60)}...`);
-      console.log(`  📊 信心度: ${consensus.confidence}%`);
-    }
-
-    return consensus;
+    const results = await this.conductAllDebates([dimension], reports, agents, chart, options);
+    return results[0];
   }
 
   /**
-   * 裁判 LLM：综合各方观点达成共识
+   * Batch synthesize all disputed dimensions in a single LLM call.
    */
-  private async synthesize(
-    dimension: AnalysisDimension,
-    initial: DebateStatement[],
-    debate: DebateStatement[],
+  private async batchSynthesize(
+    dimensions: AnalysisDimension[],
+    allStatements: Map<AnalysisDimension, DebateStatement[]>,
     options: SchoolAgentOptions = {},
-  ): Promise<DebateConsensus> {
-    const client = new OpenAI({
-      apiKey: options.apiKey || process.env.OPENAI_API_KEY || '',
-      baseURL: options.baseUrl || process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
+  ): Promise<DebateConsensus[]> {
+    const client = this.sharedClient || createLlmClient({
+      apiKey: options.apiKey,
+      baseUrl: options.baseUrl,
     });
     const model = options.model || process.env.FATEREAD_JUDGE_MODEL || process.env.FATEREAD_MODEL || 'deepseek-v4-pro';
     const maxTokens = options.maxTokens || Number(process.env.FATEREAD_MAX_TOKENS) || 262144;
 
-    const systemPrompt = `你是一位学贯中西、兼通三派的命理学裁判。你的任务是综合子平八字、紫微斗数、盲派命理三个流派的观点，达成一个公正、全面的共识结论。
+    const systemPrompt = `你是一位学贯中西、兼通三派的命理学裁判。综合子平八字、紫微斗数、盲派命理三个流派观点，达成公正全面共识。
 
-你的原则：
-1. **尊重每个流派的独特视角**：子平重格局用神、紫微重星曜宫位、盲派重做功取象
-2. **多数一致优先**：如果两个以上流派结论类似，倾向于采纳多数意见
-3. **少数派保留权**：如果少数派有强有力的命理依据，应予以保留说明
-4. **综合创新**：在多派观点基础上，可以提出更全面的综合见解
-5. **实事求是**：如果确实无法达成一致，如实说明分歧
+原则：
+1. 尊重每个流派的独特视角
+2. 多数一致优先
+3. 少数派保留权
+4. 综合创新
+5. 实事求是
 
-请以 JSON 格式回答。`;
+请对每个维度以 JSON 数组格式回答。`;
 
-    const initialText = initial.map(s =>
-      `【${SCHOOL_NAMES[s.schoolId]}初始立场】${s.position}\n依据：${s.evidence}`
-    ).join('\n\n');
+    let dimensionsText = '';
+    for (const dim of dimensions) {
+      const statements = allStatements.get(dim) || [];
+      const statementsText = statements.map(s => {
+        let text = `【${SCHOOL_NAMES[s.schoolId]}】立场：${s.position}\n依据：${s.evidence}`;
+        if (s.rebuttal) text += `\n反驳：${s.rebuttal}`;
+        if (s.concession) text += `\n让步：${s.concession}`;
+        return text;
+      }).join('\n\n');
 
-    const debateText = debate.length > 0 ? debate.map(s => {
-      let text = `【${SCHOOL_NAMES[s.schoolId]}辩论发言】立场：${s.position}\n依据：${s.evidence}`;
-      if (s.rebuttal) text += `\n反驳：${s.rebuttal}`;
-      if (s.concession) text += `\n让步：${s.concession}`;
-      return text;
-    }).join('\n\n') : '（无辩论发言）';
+      dimensionsText += `### ${dim}\n${statementsText}\n\n`;
+    }
 
-    const userPrompt = `当前辩论维度：${dimension}
+    const userPrompt = `请对以下维度进行综合裁决：
 
-## 各流派初始立场
-${initialText}
+${dimensionsText}
 
-## 辩论过程
-${debateText}
-
-请综合以上观点，以 JSON 格式给出共识：
-{
-  "consensus": "最终共识结论",
-  "majority_view": "多数派观点",
-  "dissent": "少数派保留意见（如无则null）",
-  "synthesis_reasoning": "综合推理过程（说明为何选择此结论）",
-  "confidence": 80,
-  "contributing_schools": ["ziping", "ziwei", "mangpai"]
-}`;
+请以 JSON 数组格式回答（一个元素对应一个维度）：
+[
+  {
+    "dimension": "维度名",
+    "consensus": "最终共识结论",
+    "majority_view": "多数派观点",
+    "dissent": "少数派保留意见（如无则null）",
+    "synthesis_reasoning": "综合推理过程",
+    "confidence": 80,
+    "contributing_schools": ["ziping", "ziwei", "mangpai"]
+  }
+]`;
 
     try {
       const response = await client.chat.completions.create({
@@ -242,95 +245,83 @@ ${debateText}
         max_tokens: maxTokens,
       });
 
-      // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content
-      const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
-      let content = (message?.content as string) || '';
-      if (!content && message?.reasoning_content) {
-        content = message.reasoning_content as string;
+      if (this.tokenTracker && response.usage) {
+        recordUsage(this.tokenTracker, model, {
+          promptTokens: response.usage.prompt_tokens,
+          completionTokens: response.usage.completion_tokens,
+          totalTokens: response.usage.total_tokens,
+        });
       }
-      return this.parseConsensusResponse(content, dimension, initial);
-    } catch (error: unknown) {
-      // 裁判失败，使用多数派结论
-      return this.fallbackConsensus(dimension, initial);
-    }
-  }
 
-  /**
-   * 清洗 LLM 返回的不规范 JSON
-   */
-  private sanitizeJson(raw: string): string {
-    let s = raw;
-    s = s.replace(/```(?:json)?\s*/g, '').replace(/```\s*$/g, '');
-    const m = s.match(/\{[\s\S]*\}/);
-    if (m) s = m[0];
-    s = s.replace(/"([^"\\]|\\.)*"/g, (match) =>
-      match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t'));
-    s = s.replace(/,\s*([}\]])/g, '$1');
-    s = s.replace(/"\s*：\s*/g, '": ');
-    s = s.replace(/\u201c/g, '"').replace(/\u201d/g, '"');
-    return s;
-  }
-
-  /**
-   * 安全解析 JSON
-   */
-  private safeJsonParse(content: string): unknown {
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    const raw = jsonMatch ? jsonMatch[0] : content;
-    try {
-      return JSON.parse(raw);
+      const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
+      const content = extractContent(message);
+      return this.parseBatchConsensus(content, dimensions, allStatements);
     } catch {
-      return JSON.parse(this.sanitizeJson(content));
+      // Fallback: majority vote per dimension
+      return dimensions.map(dim => this.fallbackConsensus(dim, allStatements.get(dim) || []));
     }
   }
 
-  /**
-   * 解析共识响应
-   */
-  private parseConsensusResponse(
+  private parseBatchConsensus(
     content: string,
-    dimension: AnalysisDimension,
-    statements: DebateStatement[],
-  ): DebateConsensus {
-    try {
-      const parsed = this.safeJsonParse(content) as Record<string, unknown>;
+    dimensions: AnalysisDimension[],
+    allStatements: Map<AnalysisDimension, DebateStatement[]>,
+  ): DebateConsensus[] {
+    // Try parsing as array first
+    const parsed = safeJsonParse<unknown[]>(content);
 
-      return {
-        dimension,
-        consensus: (parsed.consensus as string) || '',
-        majorityView: (parsed.majority_view as string) || '',
-        dissent: parsed.dissent as string | undefined,
-        synthesisReasoning: (parsed.synthesis_reasoning as string) || '',
-        confidence: (parsed.confidence as number) || 70,
-        contributingSchools: (parsed.contributing_schools as SchoolId[]) || statements.map(s => s.schoolId),
-      };
-    } catch {
-      return this.fallbackConsensus(dimension, statements);
+    if (Array.isArray(parsed)) {
+      return dimensions.map(dim => {
+        const found = parsed.find((item: unknown) =>
+          item && typeof item === 'object' && (item as Record<string, unknown>).dimension === dim
+        ) as Record<string, unknown> | undefined;
+
+        if (found) {
+          return {
+            dimension: dim,
+            consensus: (found.consensus as string) || '',
+            majorityView: (found.majority_view as string) || '',
+            dissent: found.dissent as string | undefined,
+            synthesisReasoning: (found.synthesis_reasoning as string) || '',
+            confidence: (found.confidence as number) || 70,
+            contributingSchools: (found.contributing_schools as SchoolId[]) ||
+              (allStatements.get(dim) || []).map(s => s.schoolId),
+          };
+        }
+        return this.fallbackConsensus(dim, allStatements.get(dim) || []);
+      });
     }
+
+    // If array parse failed, try as single object (fallback for old format)
+    const singleParsed = safeJsonParse<Record<string, unknown>>(content);
+    if (singleParsed && singleParsed.consensus && dimensions.length === 1) {
+      return [{
+        dimension: dimensions[0],
+        consensus: (singleParsed.consensus as string) || '',
+        majorityView: (singleParsed.majority_view as string) || '',
+        dissent: singleParsed.dissent as string | undefined,
+        synthesisReasoning: (singleParsed.synthesis_reasoning as string) || '',
+        confidence: (singleParsed.confidence as number) || 70,
+        contributingSchools: (singleParsed.contributing_schools as SchoolId[]) ||
+          (allStatements.get(dimensions[0]) || []).map(s => s.schoolId),
+      }];
+    }
+
+    return dimensions.map(dim => this.fallbackConsensus(dim, allStatements.get(dim) || []));
   }
 
-  /**
-   * 降级共识（裁判失败时）
-   */
-  private fallbackConsensus(
-    dimension: AnalysisDimension,
-    statements: DebateStatement[],
-  ): DebateConsensus {
-    // 简单多数派：取第一个作为共识
+  private fallbackConsensus(dimension: AnalysisDimension, statements: DebateStatement[]): DebateConsensus {
     const primary = statements[0];
     return {
       dimension,
-      consensus: primary?.position || '各流派意见不一，请综合参考',
+      consensus: primary?.position || '各流派意见不一',
       majorityView: primary?.position || '',
-      synthesisReasoning: '由于综合判断未能完成，取首要流派（子平八字）结论为主',
+      synthesisReasoning: '综合判断未能完成，取首要流派结论为主',
       confidence: 50,
       contributingSchools: statements.map(s => s.schoolId),
     };
   }
 
-  /**
-   * Jaccard 相似度计算
-   */
   private jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
     if (setA.size === 0 && setB.size === 0) return 1;
     const intersection = new Set([...setA].filter(x => setB.has(x)));

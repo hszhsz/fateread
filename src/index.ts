@@ -8,10 +8,9 @@ export type { BaziChart, PaipanInput, UserProfile, ParentInfo, SiblingInfo, Life
 export { loadSkills, getSkill, buildSkillCatalog, saveDocument, getDefaultSkillsDir, getDefaultOutputDir } from './skills/index.js';
 export type { Skill, SkillMeta } from './skills/index.js';
 
-// Legacy skill functions
-export { generateMingBook, generateYunBook } from './skills/index.js';
-export type { MingBookOptions, YunBookOptions } from './skills/index.js';
-
 // Multi-school system
 export { Orchestrator, ZipingAgent, ZiweiAgent, MangpaiAgent, DebateProtocol } from './agent/schools/index.js';
 export type { SchoolId, SchoolReport, SynthesizedReport, AnalysisDimension } from './agent/schools/index.js';
+
+// Shared utilities
+export { sanitizeJson, safeJsonParse, getField } from './shared/json-utils.js';

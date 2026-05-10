@@ -1,6 +1,6 @@
 // ============================================================
 // FateRead - Base School Agent (流派子 Agent 基类)
-// 封装 LLM 调用和通用逻辑，各流派只需提供 Prompt 和方法论
+// Uses shared json-utils, llm-client; optional shared client injection
 // ============================================================
 
 import OpenAI from 'openai';
@@ -16,61 +16,59 @@ import type {
   SchoolAgentOptions,
 } from './types.js';
 import { SCHOOL_NAMES } from './types.js';
+import { safeJsonParse } from '../../shared/json-utils.js';
+import { createLlmClient, resolveModel, resolveMaxTokens, extractContent } from '../../shared/llm-client.js';
+import type { TokenTracker } from '../../shared/llm-client.js';
+import { recordUsage } from '../../shared/llm-client.js';
 
 /**
- * 子 Agent 基类
- * 各流派继承此类，只需实现:
- *   - getSystemPrompt()     → 流派方法论 prompt
- *   - formatChartData()     → 将通用命盘转为流派视角数据
- *   - getDebatePrompt()     → 辩论时的系统 prompt
+ * Sub-agent base class.
+ * Each school inherits and implements:
+ *   - getSystemPrompt()    → school methodology prompt
+ *   - formatChartData()    → chart data in school-specific format
+ *   - getDebatePrompt()    → debate system prompt (optional override)
  */
 export abstract class BaseSchoolAgent implements SchoolAgent {
   readonly id: SchoolId;
   readonly name: string;
+  /** Shared client (injected by orchestrator for reuse) */
+  sharedClient?: OpenAI;
+  tokenTracker?: TokenTracker;
 
   constructor(id: SchoolId) {
     this.id = id;
     this.name = SCHOOL_NAMES[id];
   }
 
-  /**
-   * 子类实现：返回该流派的系统 Prompt（方法论）
-   */
   protected abstract getSystemPrompt(): string;
-
-  /**
-   * 子类实现：将通用 BaziChart 转为该流派视角的文本数据
-   */
   protected abstract formatChartData(chart: BaziChart, profile: UserProfile | null): string;
 
-  /**
-   * 子类实现（可选）：辩论时的系统 Prompt
-   */
   protected getDebateSystemPrompt(): string {
     return `你是${this.name}流派的命理专家，正在与其他流派进行学术辩论。
-请基于${this.name}的理论体系，对争议维度给出你的立场、依据和论证。
-你应该：
-1. 坚持${this.name}的核心理论，但也承认其他流派的合理之处
-2. 用具体的命理依据（干支、星曜、格局）支撑论点
-3. 如果确实认同对方观点，可以做出适当让步
+基于${this.name}的理论体系，对争议维度给出立场、依据和论证。
+坚持${this.name}的核心理论，也承认其他流派的合理之处。
+用具体的命理依据支撑论点。如认同对方观点，可适当让步。
 请以 JSON 格式回答。`;
   }
 
-  /**
-   * 创建 LLM 客户端
-   */
-  private createClient(options: SchoolAgentOptions = {}): { client: OpenAI; model: string; maxTokens: number } {
-    const client = new OpenAI({
-      apiKey: options.apiKey || process.env.OPENAI_API_KEY || '',
-      baseURL: options.baseUrl || process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
+  /** Get or create an OpenAI client */
+  private getClient(options: SchoolAgentOptions = {}): OpenAI {
+    return this.sharedClient || createLlmClient({
+      apiKey: options.apiKey,
+      baseUrl: options.baseUrl,
     });
-    const model = options.model || process.env.FATEREAD_SCHOOL_MODEL || process.env.FATEREAD_MODEL || 'deepseek-v4-pro';
-    const maxTokens = options.maxTokens || Number(process.env.FATEREAD_MAX_TOKENS) || 262144;
-    return { client, model, maxTokens };
+  }
+
+  private getModel(options: SchoolAgentOptions = {}): string {
+    return options.model || process.env.FATEREAD_SCHOOL_MODEL || process.env.FATEREAD_MODEL || 'deepseek-v4-pro';
+  }
+
+  private getMaxTokens(options: SchoolAgentOptions = {}): number {
+    return options.maxTokens || Number(process.env.FATEREAD_MAX_TOKENS) || 262144;
   }
 
   /**
-   * 分析命盘
+   * Analyze a chart from this school's perspective.
    */
   async analyze(
     chart: BaziChart,
@@ -78,7 +76,9 @@ export abstract class BaseSchoolAgent implements SchoolAgent {
     dimensions: AnalysisDimension[],
     options: SchoolAgentOptions = {},
   ): Promise<SchoolReport> {
-    const { client, model, maxTokens } = this.createClient(options);
+    const client = this.getClient(options);
+    const model = this.getModel(options);
+    const maxTokens = this.getMaxTokens(options);
     const chartData = this.formatChartData(chart, profile);
     const systemPrompt = this.getSystemPrompt();
 
@@ -120,12 +120,16 @@ ${chartData}
         max_tokens: maxTokens,
       });
 
-      // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content
-      const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
-      let content = (message?.content as string) || '';
-      if (!content && message?.reasoning_content) {
-        content = message.reasoning_content as string;
+      if (this.tokenTracker && response.usage) {
+        recordUsage(this.tokenTracker, model, {
+          promptTokens: response.usage.prompt_tokens,
+          completionTokens: response.usage.completion_tokens,
+          totalTokens: response.usage.total_tokens,
+        });
       }
+
+      const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
+      const content = extractContent(message);
       return this.parseAnalysisResponse(content, dimensions);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -135,7 +139,7 @@ ${chartData}
   }
 
   /**
-   * 参与辩论
+   * Participate in debate for a specific dimension.
    */
   async debate(
     dimension: AnalysisDimension,
@@ -144,7 +148,9 @@ ${chartData}
     chart: BaziChart,
     options: SchoolAgentOptions = {},
   ): Promise<DebateStatement> {
-    const { client, model, maxTokens } = this.createClient(options);
+    const client = this.getClient(options);
+    const model = this.getModel(options);
+    const maxTokens = this.getMaxTokens(options);
 
     const othersText = otherPositions.map(p =>
       `【${SCHOOL_NAMES[p.schoolId]}】立场：${p.position}\n依据：${p.evidence}`
@@ -179,15 +185,18 @@ ${othersText}
         max_tokens: maxTokens,
       });
 
-      // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content
-      const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
-      let content = (message?.content as string) || '';
-      if (!content && message?.reasoning_content) {
-        content = message.reasoning_content as string;
+      if (this.tokenTracker && response.usage) {
+        recordUsage(this.tokenTracker, model, {
+          promptTokens: response.usage.prompt_tokens,
+          completionTokens: response.usage.completion_tokens,
+          totalTokens: response.usage.total_tokens,
+        });
       }
+
+      const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
+      const content = extractContent(message);
       return this.parseDebateResponse(content, dimension);
-    } catch (error: unknown) {
-      // 辩论失败，返回原始立场
+    } catch {
       return {
         schoolId: this.id,
         dimension,
@@ -197,65 +206,15 @@ ${othersText}
     }
   }
 
-  /**
-   * 清洗 LLM 返回的不规范 JSON 文本
-   * 处理常见问题：trailing comma、raw newlines、中文标点等
-   */
-  private sanitizeJson(raw: string): string {
-    let s = raw;
+  // ============================================================
+  // Response Parsers (using shared safeJsonParse)
+  // ============================================================
 
-    // 1. 去除 markdown 代码块标记
-    s = s.replace(/```(?:json)?\s*/g, '').replace(/```\s*$/g, '');
-
-    // 2. 提取 JSON 对象
-    const jsonMatch = s.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      s = jsonMatch[0];
-    }
-
-    // 3. 将字符串值内的 raw newline 替换为 \\n
-    //    策略：在引号内的实际换行替换为转义换行
-    s = s.replace(/"([^"\\]|\\.)*"/g, (match) => {
-      return match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
-    });
-
-    // 4. 移除 trailing commas: ,] 或 ,}
-    s = s.replace(/,\s*([}\]])/g, '$1');
-
-    // 5. 中文冒号 → 英文冒号（仅在引号外）
-    s = s.replace(/"\s*：\s*/g, '": ');
-
-    // 6. 中文引号 → 英文引号
-    s = s.replace(/\u201c/g, '"').replace(/\u201d/g, '"');
-    s = s.replace(/\u2018/g, "'").replace(/\u2019/g, "'");
-
-    return s;
-  }
-
-  /**
-   * 安全解析 JSON，先尝试直接解析，失败后清洗再试
-   */
-  private safeJsonParse(content: string): unknown {
-    // 第一次：直接提取 JSON 解析
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    const raw = jsonMatch ? jsonMatch[0] : content;
-    try {
-      return JSON.parse(raw);
-    } catch {
-      // 第二次：清洗后重试
-      const sanitized = this.sanitizeJson(content);
-      return JSON.parse(sanitized);
-    }
-  }
-
-  /**
-   * 解析分析响应
-   */
   private parseAnalysisResponse(content: string, dimensions: AnalysisDimension[]): SchoolReport {
-    try {
-      const parsed = this.safeJsonParse(content) as Record<string, unknown>;
+    const parsed = safeJsonParse<Record<string, unknown>>(content);
 
-      const analyses: DimensionAnalysis[] = (parsed.analyses as Record<string, unknown>[] || []).map((a: Record<string, unknown>) => ({
+    if (parsed && parsed.analyses) {
+      const analyses: DimensionAnalysis[] = ((parsed.analyses as Record<string, unknown>[]) || []).map((a: Record<string, unknown>) => ({
         dimension: a.dimension as AnalysisDimension,
         conclusion: (a.conclusion as string) || '',
         confidence: (a.confidence as number) || 70,
@@ -276,19 +235,16 @@ ${othersText}
         overallScore: parsed.overall_score as number | undefined,
         rawReasoning: parsed.raw_reasoning as string | undefined,
       };
-    } catch {
-      console.error(`⚠️  ${this.name}响应解析失败，使用原始文本`);
-      return this.createFallbackReport(dimensions, content);
     }
+
+    console.error(`⚠️  ${this.name}响应解析失败，使用原始文本`);
+    return this.createFallbackReport(dimensions, content);
   }
 
-  /**
-   * 解析辩论响应
-   */
   private parseDebateResponse(content: string, dimension: AnalysisDimension): DebateStatement {
-    try {
-      const parsed = this.safeJsonParse(content) as Record<string, unknown>;
+    const parsed = safeJsonParse<Record<string, unknown>>(content);
 
+    if (parsed && parsed.position) {
       return {
         schoolId: this.id,
         dimension,
@@ -297,19 +253,16 @@ ${othersText}
         rebuttal: parsed.rebuttal as string | undefined,
         concession: parsed.concession as string | undefined,
       };
-    } catch {
-      return {
-        schoolId: this.id,
-        dimension,
-        position: content.slice(0, 200),
-        evidence: '（解析失败，原始文本）',
-      };
     }
+
+    return {
+      schoolId: this.id,
+      dimension,
+      position: content.slice(0, 200),
+      evidence: '（解析失败，原始文本）',
+    };
   }
 
-  /**
-   * 创建降级报告
-   */
   private createFallbackReport(dimensions: AnalysisDimension[], reason: string): SchoolReport {
     return {
       schoolId: this.id,

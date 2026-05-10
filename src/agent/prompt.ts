@@ -235,3 +235,19 @@ export const TOOL_DESCRIPTIONS = {
   getChartContext: '获取命盘数据：返回结构化的命盘分析数据（含缘主画像纬线信息）。',
   saveDocument: '保存文档：将 Markdown 文档保存为本地文件。',
 };
+
+// ============================================================
+// Dynamic System Prompt Builder
+// Injects current intake step hint into the system prompt.
+// ============================================================
+
+import type { SessionState } from './tools.js';
+
+/**
+ * Build the complete system prompt with the current intake step hint.
+ * Call this whenever the intake step changes.
+ */
+export function buildDynamicSystemPrompt(state: SessionState): string {
+  const hint = state.getIntakeHint();
+  return SYSTEM_PROMPT + '\n\n## 当前采集步骤\n\n' + hint;
+}
