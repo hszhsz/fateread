@@ -238,10 +238,15 @@ ${debateText}
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.2,
-        max_tokens: 2000,
+        max_tokens: 8192,
       });
 
-      const content = response.choices[0]?.message?.content || '';
+      // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content
+      const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
+      let content = (message?.content as string) || '';
+      if (!content && message?.reasoning_content) {
+        content = message.reasoning_content as string;
+      }
       return this.parseConsensusResponse(content, dimension, initial);
     } catch (error: unknown) {
       // 裁判失败，使用多数派结论

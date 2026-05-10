@@ -145,10 +145,16 @@ export async function verifyPillars(
         { role: 'user', content: userMsg },
       ],
       temperature: 0,  // 确定性输出
-      max_tokens: 500,
+      max_tokens: 8192, // 推理模型需要更多 token（reasoning + output）
     });
 
-    const content = response.choices[0]?.message?.content || '';
+    // DeepSeek 推理模型将思考过程放在 reasoning_content，最终答案在 content
+    // 如果 content 为空（推理 token 耗尽），尝试从 reasoning_content 中提取
+    const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
+    let content = (message?.content as string) || '';
+    if (!content && message?.reasoning_content) {
+      content = message.reasoning_content as string;
+    }
     const llmPillars = parseLLMResponse(content);
 
     if (!llmPillars) {

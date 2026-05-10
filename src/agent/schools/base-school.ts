@@ -116,10 +116,15 @@ ${chartData}
           { role: 'user', content: userPrompt },
         ],
         temperature: options.temperature ?? 0.3,
-        max_tokens: 4000,
+        max_tokens: 16384, // 推理模型需要更多 token（reasoning + output）
       });
 
-      const content = response.choices[0]?.message?.content || '';
+      // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content
+      const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
+      let content = (message?.content as string) || '';
+      if (!content && message?.reasoning_content) {
+        content = message.reasoning_content as string;
+      }
       return this.parseAnalysisResponse(content, dimensions);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -170,10 +175,15 @@ ${othersText}
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.3,
-        max_tokens: 1500,
+        max_tokens: 8192,
       });
 
-      const content = response.choices[0]?.message?.content || '';
+      // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content
+      const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
+      let content = (message?.content as string) || '';
+      if (!content && message?.reasoning_content) {
+        content = message.reasoning_content as string;
+      }
       return this.parseDebateResponse(content, dimension);
     } catch (error: unknown) {
       // 辩论失败，返回原始立场
