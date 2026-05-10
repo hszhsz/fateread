@@ -161,5 +161,6 @@ export interface SchoolAgentOptions {
   baseUrl?: string;
   model?: string;
   temperature?: number;
+  maxTokens?: number;
   verbose?: boolean;
 }

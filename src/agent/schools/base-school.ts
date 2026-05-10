@@ -59,13 +59,14 @@ export abstract class BaseSchoolAgent implements SchoolAgent {
   /**
    * 创建 LLM 客户端
    */
-  private createClient(options: SchoolAgentOptions = {}): { client: OpenAI; model: string } {
+  private createClient(options: SchoolAgentOptions = {}): { client: OpenAI; model: string; maxTokens: number } {
     const client = new OpenAI({
       apiKey: options.apiKey || process.env.OPENAI_API_KEY || '',
       baseURL: options.baseUrl || process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
     });
     const model = options.model || process.env.FATEREAD_SCHOOL_MODEL || process.env.FATEREAD_MODEL || 'deepseek-v4-pro';
-    return { client, model };
+    const maxTokens = options.maxTokens || Number(process.env.FATEREAD_MAX_TOKENS) || 262144;
+    return { client, model, maxTokens };
   }
 
   /**
@@ -77,7 +78,7 @@ export abstract class BaseSchoolAgent implements SchoolAgent {
     dimensions: AnalysisDimension[],
     options: SchoolAgentOptions = {},
   ): Promise<SchoolReport> {
-    const { client, model } = this.createClient(options);
+    const { client, model, maxTokens } = this.createClient(options);
     const chartData = this.formatChartData(chart, profile);
     const systemPrompt = this.getSystemPrompt();
 
@@ -116,7 +117,7 @@ ${chartData}
           { role: 'user', content: userPrompt },
         ],
         temperature: options.temperature ?? 0.3,
-        max_tokens: 262144, // 推理模型需要更多 token（reasoning + output），最小 256k
+        max_tokens: maxTokens,
       });
 
       // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content
@@ -143,7 +144,7 @@ ${chartData}
     chart: BaziChart,
     options: SchoolAgentOptions = {},
   ): Promise<DebateStatement> {
-    const { client, model } = this.createClient(options);
+    const { client, model, maxTokens } = this.createClient(options);
 
     const othersText = otherPositions.map(p =>
       `【${SCHOOL_NAMES[p.schoolId]}】立场：${p.position}\n依据：${p.evidence}`
@@ -175,7 +176,7 @@ ${othersText}
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.3,
-        max_tokens: 262144,
+        max_tokens: maxTokens,
       });
 
       // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content

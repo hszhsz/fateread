@@ -64,6 +64,10 @@ FATEREAD_MODEL=deepseek-v4-pro
 
 # 四柱验证模型（可选，默认同 FATEREAD_MODEL）
 # FATEREAD_VERIFY_MODEL=deepseek-v4-pro
+
+# 最大 Token 数（默认 262144 即 256k）
+# 推理模型的 reasoning + output 共享此额度，按模型上下文窗口调整
+# FATEREAD_MAX_TOKENS=262144
 ```
 
 ### 切换其他模型

@@ -189,6 +189,7 @@ export class DebateProtocol {
       baseURL: options.baseUrl || process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
     });
     const model = options.model || process.env.FATEREAD_JUDGE_MODEL || process.env.FATEREAD_MODEL || 'deepseek-v4-pro';
+    const maxTokens = options.maxTokens || Number(process.env.FATEREAD_MAX_TOKENS) || 262144;
 
     const systemPrompt = `你是一位学贯中西、兼通三派的命理学裁判。你的任务是综合子平八字、紫微斗数、盲派命理三个流派的观点，达成一个公正、全面的共识结论。
 
@@ -238,7 +239,7 @@ ${debateText}
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.2,
-        max_tokens: 262144,
+        max_tokens: maxTokens,
       });
 
       // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content

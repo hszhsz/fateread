@@ -30,6 +30,7 @@ export interface VerifyOptions {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  maxTokens?: number;
 }
 
 // ============================================================
@@ -111,6 +112,7 @@ export async function verifyPillars(
     baseURL: options.baseUrl || process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
   });
   const model = options.model || process.env.FATEREAD_VERIFY_MODEL || process.env.FATEREAD_MODEL || 'deepseek-v4-pro';
+  const maxTokens = options.maxTokens || Number(process.env.FATEREAD_MAX_TOKENS) || 262144;
 
   const fp = chart.fourPillars;
   const original = {
@@ -145,7 +147,7 @@ export async function verifyPillars(
         { role: 'user', content: userMsg },
       ],
       temperature: 0,  // 确定性输出
-      max_tokens: 262144, // 推理模型需要更多 token（reasoning + output），最小 256k
+      max_tokens: maxTokens,
     });
 
     // DeepSeek 推理模型将思考过程放在 reasoning_content，最终答案在 content
