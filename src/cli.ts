@@ -3,6 +3,17 @@
 // FateRead - CLI Entry Point
 // ============================================================
 
+import { config } from 'dotenv';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// 加载项目根目录的 .env 文件
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+// 支持从 dist/ 或 src/ 运行，都能找到根目录的 .env
+const envPath = resolve(__dirname, '..', '.env');
+config({ path: envPath });
+
 import { createInterface } from 'readline';
 import { FateReadAgent } from './agent/agent.js';
 import { paipan, formatChart } from './core/index.js';
@@ -58,12 +69,11 @@ async function main() {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     console.log(BANNER);
-    console.log('⚠️  未设置 OPENAI_API_KEY 环境变量。');
-    console.log('   可以使用 --offline 模式仅进行排盘（无 AI 解读）：');
+    console.log('⚠️  未设置 OPENAI_API_KEY。');
+    console.log('   请在项目根目录创建 .env 文件并配置（参考 .env.example）：');
+    console.log('   OPENAI_API_KEY=your_deepseek_api_key\n');
+    console.log('   或使用 --offline 模式仅进行排盘（无 AI 解读）：');
     console.log('   $ fateread --offline\n');
-    console.log('   或设置 API Key 后使用完整功能：');
-    console.log('   $ export OPENAI_API_KEY=your_key');
-    console.log('   $ fateread\n');
 
     // 进入离线模式
     await offlineMode();

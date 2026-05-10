@@ -32,9 +32,9 @@ export class FateReadAgent {
   constructor(options: AgentOptions = {}) {
     this.client = new OpenAI({
       apiKey: options.apiKey || process.env.OPENAI_API_KEY || '',
-      baseURL: options.baseUrl || process.env.OPENAI_BASE_URL,
+      baseURL: options.baseUrl || process.env.OPENAI_BASE_URL || 'https://api.deepseek.com',
     });
-    this.model = options.model || process.env.FATEREAD_MODEL || 'gpt-4o';
+    this.model = options.model || process.env.FATEREAD_MODEL || 'deepseek-v4-pro';
 
     // 初始化系统提示
     this.messages.push({
