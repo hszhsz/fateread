@@ -51,7 +51,7 @@ export class FateReadAgent {
     this.messages.push({ role: 'user', content: userMessage });
 
     // 工具调用循环
-    let maxIterations = 5;
+    let maxIterations = 8;
     while (maxIterations-- > 0) {
       const response = await this.callLLM();
 
@@ -83,7 +83,7 @@ export class FateReadAgent {
         const funcArgs = JSON.parse(toolCall.function.arguments);
 
         console.log(`\n⚙️  调用工具: ${funcName}`);
-        const result = executeTool(funcName, funcArgs);
+        const result = await executeTool(funcName, funcArgs);
 
         this.messages.push({
           role: 'tool',
@@ -132,8 +132,8 @@ export class FateReadAgent {
         const funcName = toolCall.function.name;
         const funcArgs = JSON.parse(toolCall.function.arguments);
 
-        yield `\n⚙️  正在排盘计算 (${funcName})...\n`;
-        const result = executeTool(funcName, funcArgs);
+        yield `\n⚙️  正在处理 (${funcName})...\n`;
+        const result = await executeTool(funcName, funcArgs);
 
         this.messages.push({
           role: 'tool',
@@ -147,6 +147,16 @@ export class FateReadAgent {
             const parsed = JSON.parse(result);
             if (parsed.formatted) {
               yield '\n' + parsed.formatted + '\n';
+            }
+          } catch { /* ignore */ }
+        }
+
+        // 如果是命之书或运之书，展示生成结果
+        if (funcName === 'generate_ming_book' || funcName === 'generate_yun_book') {
+          try {
+            const parsed = JSON.parse(result);
+            if (parsed.success && parsed.content) {
+              yield '\n' + parsed.content + '\n';
             }
           } catch { /* ignore */ }
         }

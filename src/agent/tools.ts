@@ -6,6 +6,8 @@ import { paipan, formatChart, calculateLiuNian, calculateLiuNianRange } from '..
 import type { PaipanInput, BaziChart } from '../core/types.js';
 import { CITY_LONGITUDE } from '../core/solar-time.js';
 import { getShiShen, STEM_ELEMENT } from '../core/constants.js';
+import { generateMingBook } from '../skills/ming-book.js';
+import { generateYunBook } from '../skills/yun-book.js';
 
 /**
  * OpenAI function calling 格式的工具定义
@@ -61,6 +63,33 @@ export const TOOLS = [
       },
     },
   },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'generate_ming_book',
+      description: '生成【命之书】：基于已排好的命盘，调用AI撰写一份详尽的先天特质分析Markdown文档。包含日主论命、格局分析、十神星曜、五行禀赋、性格画像、事业天赋、财富格局、情感婚姻、健康体质、神煞点评等十个章节。需要先调用paipan排盘后才能使用。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'generate_yun_book',
+      description: '生成【运之书】：基于已排好的命盘，调用AI撰写一份详尽的大运流年运势Markdown文档。逐步分析每步大运的运势基调，逐年点评关键流年，标注重要年份的趋吉避凶建议。需要先调用paipan排盘后才能使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          start_year: { type: 'number', description: '分析起始年份（可选，默认从当前年份开始）' },
+          end_year: { type: 'number', description: '分析结束年份（可选，默认到最后一步大运）' },
+        },
+        required: [],
+      },
+    },
+  },
 ];
 
 // 存储当前会话的命盘
@@ -76,8 +105,9 @@ export function setCurrentChart(chart: BaziChart): void {
 
 /**
  * 执行工具调用
+ * 注意：generate_ming_book 和 generate_yun_book 是异步工具
  */
-export function executeTool(name: string, args: Record<string, unknown>): string {
+export async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
   switch (name) {
     case 'paipan':
       return executePaipan(args);
@@ -85,6 +115,10 @@ export function executeTool(name: string, args: Record<string, unknown>): string
       return executeAnalyzeLiuNian(args);
     case 'analyze_liunian_range':
       return executeAnalyzeLiuNianRange(args);
+    case 'generate_ming_book':
+      return executeGenerateMingBook();
+    case 'generate_yun_book':
+      return executeGenerateYunBook(args);
     default:
       return JSON.stringify({ error: `未知工具: ${name}` });
   }
@@ -166,4 +200,49 @@ function executeAnalyzeLiuNianRange(args: Record<string, unknown>): string {
   });
 
   return JSON.stringify(result, null, 2);
+}
+
+// ============================================================
+// 命之书 & 运之书 执行函数
+// ============================================================
+
+async function executeGenerateMingBook(): Promise<string> {
+  if (!currentChart) {
+    return JSON.stringify({ error: '请先使用 paipan 工具排盘后，再生成命之书' });
+  }
+
+  try {
+    console.log('\n📖 正在撰写命之书，请稍候（约需1-2分钟）...\n');
+    const markdown = await generateMingBook(currentChart);
+    return JSON.stringify({
+      success: true,
+      type: 'ming_book',
+      content: markdown,
+    });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ error: `命之书生成失败: ${msg}` });
+  }
+}
+
+async function executeGenerateYunBook(args: Record<string, unknown>): Promise<string> {
+  if (!currentChart) {
+    return JSON.stringify({ error: '请先使用 paipan 工具排盘后，再生成运之书' });
+  }
+
+  try {
+    console.log('\n📖 正在撰写运之书，请稍候（约需2-3分钟）...\n');
+    const markdown = await generateYunBook(currentChart, {
+      startYear: args.start_year as number | undefined,
+      endYear: args.end_year as number | undefined,
+    });
+    return JSON.stringify({
+      success: true,
+      type: 'yun_book',
+      content: markdown,
+    });
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ error: `运之书生成失败: ${msg}` });
+  }
 }
