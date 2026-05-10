@@ -5,7 +5,7 @@
 
 import OpenAI from 'openai';
 import { SYSTEM_PROMPT } from './prompt.js';
-import { TOOLS, executeTool, getCurrentChart, setCurrentChart, getCurrentProfile, initSkills, getLoadedSkills } from './tools.js';
+import { TOOLS, executeTool, getCurrentChart, setCurrentChart, getCurrentProfile, initSkills, getLoadedSkills, getOrchestrator } from './tools.js';
 import { buildSkillCatalog } from '../skills/loader.js';
 import type { UserProfile } from '../core/types.js';
 
@@ -177,6 +177,20 @@ export class FateReadAgent {
             const parsed = JSON.parse(result);
             if (parsed.success) {
               yield `\n💾 文档已保存: ${parsed.filepath}\n`;
+            }
+          } catch { /* ignore */ }
+        }
+
+        // 如果是多流派分析，展示摘要
+        if (funcName === 'multi_school_analyze') {
+          try {
+            const parsed = JSON.parse(result);
+            if (parsed.meta) {
+              yield `\n🎭 三派会诊完成 | 一致率: ${parsed.meta.agreementRate}%`;
+              if (parsed.meta.debatedDimensions.length > 0) {
+                yield ` | 辩论维度: ${parsed.meta.debatedDimensions.join(', ')}`;
+              }
+              yield '\n';
             }
           } catch { /* ignore */ }
         }

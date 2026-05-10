@@ -12,6 +12,8 @@ import { buildMingBookContext } from '../skills/ming-book.js';
 import { buildYunBookContext } from '../skills/yun-book.js';
 import type { Skill } from '../skills/loader.js';
 import { verifyPillars } from './verify-pillars.js';
+import { Orchestrator } from './schools/orchestrator.js';
+import type { SynthesizedReport, AnalysisDimension } from './schools/types.js';
 
 // ============================================================
 // Skills 加载（启动时）
@@ -29,6 +31,24 @@ export function initSkills(skillsDir?: string): void {
 
 export function getLoadedSkills(): Skill[] {
   return loadedSkills;
+}
+
+// ============================================================
+// 多流派分析协调器（启动时初始化）
+// ============================================================
+
+let orchestrator: Orchestrator | null = null;
+let lastSynthesizedReport: SynthesizedReport | null = null;
+
+export function getOrchestrator(): Orchestrator {
+  if (!orchestrator) {
+    orchestrator = new Orchestrator({ verbose: true });
+  }
+  return orchestrator;
+}
+
+export function getLastSynthesizedReport(): SynthesizedReport | null {
+  return lastSynthesizedReport;
 }
 
 // ============================================================
@@ -167,6 +187,28 @@ export const TOOLS = [
           end_year: { type: 'number', description: '结束年份' },
         },
         required: ['start_year', 'end_year'],
+      },
+    },
+  },
+  // ---- 多流派综合分析 ----
+  {
+    type: 'function' as const,
+    function: {
+      name: 'multi_school_analyze',
+      description: '多流派综合分析：同时调用子平八字、紫微斗数、盲派命理三个子 Agent 独立分析命盘，对比结论，对有分歧的维度启动辩论协调，最终输出三派共识的综合报告。必须先完成排盘（paipan）才能调用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          dimensions: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: ['personality', 'career', 'wealth', 'marriage', 'health', 'education', 'interpersonal', 'timing', 'overall'],
+            },
+            description: '要分析的维度列表。默认分析全部维度。可选: personality(性格), career(事业), wealth(财运), marriage(婚姻), health(健康), education(学业), interpersonal(人际), timing(流年), overall(综合)',
+          },
+        },
+        required: [],
       },
     },
   },
@@ -350,6 +392,8 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return executeAnalyzeLiuNian(args);
     case 'analyze_liunian_range':
       return executeAnalyzeLiuNianRange(args);
+    case 'multi_school_analyze':
+      return executeMultiSchoolAnalyze(args);
     case 'read_skill':
       return executeReadSkill(args);
     case 'get_chart_context':
@@ -657,6 +701,38 @@ function executeAnalyzeLiuNianRange(args: Record<string, unknown>): string {
   });
 
   return JSON.stringify(result, null, 2);
+}
+
+// ============================================================
+// 多流派综合分析工具实现
+// ============================================================
+
+async function executeMultiSchoolAnalyze(args: Record<string, unknown>): Promise<string> {
+  if (!currentChart) {
+    return JSON.stringify({ error: '请先使用 paipan 工具排盘后再进行多流派分析' });
+  }
+
+  const dimensions = (args.dimensions as AnalysisDimension[] | undefined) ||
+    ['personality', 'career', 'wealth', 'marriage', 'health', 'timing', 'overall'];
+
+  try {
+    const orch = getOrchestrator();
+    const report = await orch.analyze(currentChart, currentProfile, dimensions);
+
+    // 缓存最新报告
+    lastSynthesizedReport = report;
+
+    // 返回格式化的报告 + 结构化数据
+    const formatted = orch.formatReport(report);
+    return JSON.stringify({
+      formatted,
+      meta: report.meta,
+      finalAnalysis: report.finalAnalysis,
+    }, null, 2);
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ error: `多流派分析失败: ${msg}` });
+  }
 }
 
 function executeReadSkill(args: Record<string, unknown>): string {
