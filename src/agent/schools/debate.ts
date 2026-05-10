@@ -250,6 +250,35 @@ ${debateText}
   }
 
   /**
+   * 清洗 LLM 返回的不规范 JSON
+   */
+  private sanitizeJson(raw: string): string {
+    let s = raw;
+    s = s.replace(/```(?:json)?\s*/g, '').replace(/```\s*$/g, '');
+    const m = s.match(/\{[\s\S]*\}/);
+    if (m) s = m[0];
+    s = s.replace(/"([^"\\]|\\.)*"/g, (match) =>
+      match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t'));
+    s = s.replace(/,\s*([}\]])/g, '$1');
+    s = s.replace(/"\s*：\s*/g, '": ');
+    s = s.replace(/\u201c/g, '"').replace(/\u201d/g, '"');
+    return s;
+  }
+
+  /**
+   * 安全解析 JSON
+   */
+  private safeJsonParse(content: string): unknown {
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    const raw = jsonMatch ? jsonMatch[0] : content;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return JSON.parse(this.sanitizeJson(content));
+    }
+  }
+
+  /**
    * 解析共识响应
    */
   private parseConsensusResponse(
@@ -258,8 +287,7 @@ ${debateText}
     statements: DebateStatement[],
   ): DebateConsensus {
     try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+      const parsed = this.safeJsonParse(content) as Record<string, unknown>;
 
       return {
         dimension,

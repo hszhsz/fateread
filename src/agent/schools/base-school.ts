@@ -187,14 +187,64 @@ ${othersText}
   }
 
   /**
+   * 清洗 LLM 返回的不规范 JSON 文本
+   * 处理常见问题：trailing comma、raw newlines、中文标点等
+   */
+  private sanitizeJson(raw: string): string {
+    let s = raw;
+
+    // 1. 去除 markdown 代码块标记
+    s = s.replace(/```(?:json)?\s*/g, '').replace(/```\s*$/g, '');
+
+    // 2. 提取 JSON 对象
+    const jsonMatch = s.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      s = jsonMatch[0];
+    }
+
+    // 3. 将字符串值内的 raw newline 替换为 \\n
+    //    策略：在引号内的实际换行替换为转义换行
+    s = s.replace(/"([^"\\]|\\.)*"/g, (match) => {
+      return match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+    });
+
+    // 4. 移除 trailing commas: ,] 或 ,}
+    s = s.replace(/,\s*([}\]])/g, '$1');
+
+    // 5. 中文冒号 → 英文冒号（仅在引号外）
+    s = s.replace(/"\s*：\s*/g, '": ');
+
+    // 6. 中文引号 → 英文引号
+    s = s.replace(/\u201c/g, '"').replace(/\u201d/g, '"');
+    s = s.replace(/\u2018/g, "'").replace(/\u2019/g, "'");
+
+    return s;
+  }
+
+  /**
+   * 安全解析 JSON，先尝试直接解析，失败后清洗再试
+   */
+  private safeJsonParse(content: string): unknown {
+    // 第一次：直接提取 JSON 解析
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    const raw = jsonMatch ? jsonMatch[0] : content;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // 第二次：清洗后重试
+      const sanitized = this.sanitizeJson(content);
+      return JSON.parse(sanitized);
+    }
+  }
+
+  /**
    * 解析分析响应
    */
   private parseAnalysisResponse(content: string, dimensions: AnalysisDimension[]): SchoolReport {
     try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+      const parsed = this.safeJsonParse(content) as Record<string, unknown>;
 
-      const analyses: DimensionAnalysis[] = (parsed.analyses || []).map((a: Record<string, unknown>) => ({
+      const analyses: DimensionAnalysis[] = (parsed.analyses as Record<string, unknown>[] || []).map((a: Record<string, unknown>) => ({
         dimension: a.dimension as AnalysisDimension,
         conclusion: (a.conclusion as string) || '',
         confidence: (a.confidence as number) || 70,
@@ -226,8 +276,7 @@ ${othersText}
    */
   private parseDebateResponse(content: string, dimension: AnalysisDimension): DebateStatement {
     try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : content);
+      const parsed = this.safeJsonParse(content) as Record<string, unknown>;
 
       return {
         schoolId: this.id,

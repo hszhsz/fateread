@@ -202,6 +202,27 @@ export async function verifyPillars(
 // ============================================================
 
 /**
+ * 清洗 LLM 返回的不规范 JSON
+ */
+function sanitizeJson(raw: string): string {
+  let s = raw;
+  // 去除 markdown 代码块
+  s = s.replace(/```(?:json)?\s*/g, '').replace(/```\s*$/g, '');
+  // 提取 JSON 对象
+  const m = s.match(/\{[\s\S]*\}/);
+  if (m) s = m[0];
+  // 字符串值内的 raw newline
+  s = s.replace(/"([^"\\]|\\.)*"/g, (match) =>
+    match.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t'));
+  // trailing commas
+  s = s.replace(/,\s*([}\]])/g, '$1');
+  // 中文标点
+  s = s.replace(/"\s*：\s*/g, '": ');
+  s = s.replace(/\u201c/g, '"').replace(/\u201d/g, '"');
+  return s;
+}
+
+/**
  * 解析 LLM 的 JSON 响应
  */
 function parseLLMResponse(content: string): {
@@ -211,23 +232,26 @@ function parseLLMResponse(content: string): {
   hour_pillar: string;
   notes?: string;
 } | null {
-  try {
-    // 尝试直接解析
-    const parsed = JSON.parse(content);
-    if (parsed.year_pillar && parsed.month_pillar && parsed.day_pillar && parsed.hour_pillar) {
-      return parsed;
-    }
-  } catch {
-    // 尝试从文本中提取 JSON
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.year_pillar && parsed.month_pillar && parsed.day_pillar && parsed.hour_pillar) {
-          return parsed;
-        }
-      } catch { /* ignore */ }
-    }
+  // 尝试多种策略解析
+  const attempts = [
+    // 1. 直接解析
+    () => JSON.parse(content),
+    // 2. 提取 JSON 块后解析
+    () => {
+      const m = content.match(/\{[\s\S]*\}/);
+      return m ? JSON.parse(m[0]) : null;
+    },
+    // 3. 清洗后解析
+    () => JSON.parse(sanitizeJson(content)),
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      const parsed = attempt();
+      if (parsed && parsed.year_pillar && parsed.month_pillar && parsed.day_pillar && parsed.hour_pillar) {
+        return parsed;
+      }
+    } catch { /* try next */ }
   }
   return null;
 }
