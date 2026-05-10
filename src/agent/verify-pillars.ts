@@ -145,7 +145,7 @@ export async function verifyPillars(
         { role: 'user', content: userMsg },
       ],
       temperature: 0,  // 确定性输出
-      max_tokens: 8192, // 推理模型需要更多 token（reasoning + output）
+      max_tokens: 262144, // 推理模型需要更多 token（reasoning + output），最小 256k
     });
 
     // DeepSeek 推理模型将思考过程放在 reasoning_content，最终答案在 content

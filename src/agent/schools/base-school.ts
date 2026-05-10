@@ -116,7 +116,7 @@ ${chartData}
           { role: 'user', content: userPrompt },
         ],
         temperature: options.temperature ?? 0.3,
-        max_tokens: 16384, // 推理模型需要更多 token（reasoning + output）
+        max_tokens: 262144, // 推理模型需要更多 token（reasoning + output），最小 256k
       });
 
       // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content
@@ -175,7 +175,7 @@ ${othersText}
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.3,
-        max_tokens: 8192,
+        max_tokens: 262144,
       });
 
       // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content

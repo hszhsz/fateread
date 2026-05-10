@@ -238,7 +238,7 @@ ${debateText}
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.2,
-        max_tokens: 8192,
+        max_tokens: 262144,
       });
 
       // DeepSeek 推理模型：content 可能为空，fallback 到 reasoning_content
