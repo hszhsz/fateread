@@ -15,6 +15,8 @@ import type { BaziChart, FourPillars, Pillar } from '../core/types.js';
 
 export interface VerificationResult {
   verified: boolean;           // 验证是否通过
+  skipped?: boolean;           // 是否跳过验证（解析失败等）
+  skipReason?: string;         // 跳过原因
   corrections?: {              // 如果有修正
     pillar: 'year' | 'month' | 'day' | 'hour';
     original: string;          // 原始计算结果
@@ -152,8 +154,9 @@ export async function verifyPillars(
     if (!llmPillars) {
       // LLM 响应解析失败，信任算法结果
       console.log('⚠️  LLM 验证响应解析失败，信任算法结果');
-      logVerification(birthInput, original, { verified: true, llmAnswer: content });
-      return { verified: true, llmAnswer: content };
+      const skipResult: VerificationResult = { verified: true, skipped: true, skipReason: 'LLM 响应解析失败', llmAnswer: content };
+      logVerification(birthInput, original, skipResult);
+      return skipResult;
     }
 
     // 比较四柱
@@ -190,7 +193,7 @@ export async function verifyPillars(
     // API 调用失败，信任算法结果，不阻塞主流程
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`⚠️  LLM 验证调用失败: ${msg}，信任算法结果`);
-    return { verified: true };
+    return { verified: true, skipped: true, skipReason: `API 调用失败: ${msg}` };
   }
 }
 

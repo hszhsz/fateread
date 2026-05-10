@@ -622,6 +622,10 @@ async function executePaipan(args: Record<string, unknown>): Promise<string> {
             }
           }
         }
+      } else if (verifyResult.skipped) {
+        // 验证被跳过（解析失败等），不打"通过"，如实告知
+        console.log(`⚠️  LLM 验证未完成（${verifyResult.skipReason}），使用算法结果`);
+        verificationNote = `\n\n⚠️ LLM 验证未完成（${verifyResult.skipReason}），使用算法计算结果。`;
       } else {
         console.log('✅ LLM 验证通过，四柱计算正确');
         verificationNote = '\n\n✅ 四柱已通过 LLM 独立验证，结果正确。';
