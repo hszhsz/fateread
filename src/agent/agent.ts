@@ -1,15 +1,18 @@
 // ============================================================
 // FateRead - Agent Runtime (Agent 核心运行时)
+// 支持 Skill 系统：启动时加载 skills → 注入 prompt → 运行时按需读取
 // ============================================================
 
 import OpenAI from 'openai';
 import { SYSTEM_PROMPT } from './prompt.js';
-import { TOOLS, executeTool, getCurrentChart, setCurrentChart } from './tools.js';
+import { TOOLS, executeTool, getCurrentChart, setCurrentChart, initSkills, getLoadedSkills } from './tools.js';
+import { buildSkillCatalog } from '../skills/loader.js';
 
 export interface AgentOptions {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  skillsDir?: string;
 }
 
 export interface Message {
@@ -23,7 +26,7 @@ export interface Message {
 
 /**
  * FateRead Agent
- * 管理对话流程、工具调用、LLM 交互
+ * 管理对话流程、工具调用、LLM 交互、Skill 加载
  */
 export class FateReadAgent {
   private client: OpenAI;
@@ -37,10 +40,16 @@ export class FateReadAgent {
     });
     this.model = options.model || process.env.FATEREAD_MODEL || 'deepseek-v4-pro';
 
-    // 初始化系统提示
+    // 加载 Skills
+    initSkills(options.skillsDir);
+
+    // 构建系统提示（含 Skill 目录）
+    const skillCatalog = buildSkillCatalog(getLoadedSkills());
+    const systemPrompt = SYSTEM_PROMPT + skillCatalog;
+
     this.messages.push({
       role: 'system',
-      content: SYSTEM_PROMPT,
+      content: systemPrompt,
     });
   }
 
@@ -50,8 +59,8 @@ export class FateReadAgent {
   async chat(userMessage: string): Promise<string> {
     this.messages.push({ role: 'user', content: userMessage });
 
-    // 工具调用循环
-    let maxIterations = 8;
+    // 工具调用循环（增加到 10 次以支持 skill 多步流程）
+    let maxIterations = 10;
     while (maxIterations-- > 0) {
       const response = await this.callLLM();
 
@@ -102,7 +111,7 @@ export class FateReadAgent {
   async *chatStream(userMessage: string): AsyncGenerator<string, void, unknown> {
     this.messages.push({ role: 'user', content: userMessage });
 
-    let maxIterations = 5;
+    let maxIterations = 10;
     while (maxIterations-- > 0) {
       const response = await this.callLLM();
 
@@ -151,12 +160,12 @@ export class FateReadAgent {
           } catch { /* ignore */ }
         }
 
-        // 如果是命之书或运之书，展示生成结果
-        if (funcName === 'generate_ming_book' || funcName === 'generate_yun_book') {
+        // 如果是保存文档，通知用户
+        if (funcName === 'save_document') {
           try {
             const parsed = JSON.parse(result);
-            if (parsed.success && parsed.content) {
-              yield '\n' + parsed.content + '\n';
+            if (parsed.success) {
+              yield `\n💾 文档已保存: ${parsed.filepath}\n`;
             }
           } catch { /* ignore */ }
         }
@@ -211,7 +220,8 @@ export class FateReadAgent {
    * 重置对话
    */
   reset(): void {
-    this.messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+    const skillCatalog = buildSkillCatalog(getLoadedSkills());
+    this.messages = [{ role: 'system', content: SYSTEM_PROMPT + skillCatalog }];
   }
 
   /**
