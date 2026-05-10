@@ -161,3 +161,64 @@ export interface PaipanInput {
   gender: 'male' | 'female';
   longitude?: number;  // 出生地经度（用于真太阳时校正）
 }
+
+// ============================================================
+// 缘主画像（Intake System）
+// 命同而人生各异 —— 八字是"经线"，以下信息是"纬线"
+// ============================================================
+
+/** 父母年命信息 */
+export interface ParentInfo {
+  fatherBirthYear?: number;   // 父亲出生年份
+  motherBirthYear?: number;   // 母亲出生年份
+  fatherGanZhi?: string;      // 父亲年命干支（如"甲子"）
+  motherGanZhi?: string;      // 母亲年命干支
+  notes?: string;             // 补充说明（如父母健在/离异等）
+}
+
+/** 兄弟姐妹信息 */
+export interface SiblingInfo {
+  rank: number;               // 排行（第几个）
+  totalSiblings: number;      // 兄弟姐妹总数
+  siblingBirthYears?: number[]; // 兄弟姐妹出生年份
+  isTwin?: boolean;           // 是否为双胞胎
+  twinBirthMinuteDiff?: number; // 双胞胎出生时间差（分钟）
+  notes?: string;
+}
+
+/** 重大人生事件（用于定盘和应期验证） */
+export interface LifeEvent {
+  year: number;               // 事件发生年份
+  category: 'career' | 'education' | 'marriage' | 'health' | 'wealth' | 'family' | 'other';
+  description: string;        // 事件描述
+  isPositive?: boolean;       // 吉/凶
+}
+
+/** 缘主画像：八字之外的"纬线"信息 */
+export interface UserProfile {
+  // ---- 基础八字信息（必填） ----
+  birthYear: number;
+  birthMonth: number;
+  birthDay: number;
+  birthHour: number;
+  birthMinute?: number;
+  gender: 'male' | 'female';
+  birthCity?: string;         // 出生城市
+  birthLongitude?: number;    // 出生地经度
+
+  // ---- 第一类：根源信息（定根基） ----
+  parents?: ParentInfo;
+
+  // ---- 第二类：结构信息（定太极点） ----
+  siblings?: SiblingInfo;
+
+  // ---- 第三类：应期信息（定刻度） ----
+  lifeEvents?: LifeEvent[];
+
+  // ---- 缘主关注的问题 ----
+  concerns?: string[];        // 最关心的领域（事业/财运/感情/健康/学业等）
+  specificQuestion?: string;  // 具体想问的问题
+
+  // ---- 采集状态 ----
+  intakeComplete?: boolean;   // 信息采集是否完成
+}

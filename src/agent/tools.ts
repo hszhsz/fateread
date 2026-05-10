@@ -1,12 +1,12 @@
 // ============================================================
 // FateRead - Agent Tools (工具定义)
-// 支持 Skill 系统：read_skill + save_document
+// 支持 Skill 系统 + 交互式缘主画像采集
 // ============================================================
 
 import { paipan, formatChart, calculateLiuNian, calculateLiuNianRange } from '../core/index.js';
-import type { PaipanInput, BaziChart } from '../core/types.js';
+import type { PaipanInput, BaziChart, UserProfile, LifeEvent, ParentInfo, SiblingInfo } from '../core/types.js';
 import { CITY_LONGITUDE } from '../core/solar-time.js';
-import { getShiShen, STEM_ELEMENT } from '../core/constants.js';
+import { getShiShen, STEM_ELEMENT, TIAN_GAN, DI_ZHI } from '../core/constants.js';
 import { loadSkills, getSkill, saveDocument, getDefaultSkillsDir, getDefaultOutputDir } from '../skills/loader.js';
 import { buildMingBookContext } from '../skills/ming-book.js';
 import { buildYunBookContext } from '../skills/yun-book.js';
@@ -38,11 +38,92 @@ export function getLoadedSkills(): Skill[] {
  * OpenAI function calling 格式的工具定义
  */
 export const TOOLS = [
+  // ---- 缘主画像采集 ----
+  {
+    type: 'function' as const,
+    function: {
+      name: 'update_profile',
+      description: '更新缘主画像信息。在对话中逐步收集到的信息通过此工具保存。支持增量更新——每次只需传入新获取的字段。当所有必要信息收集完毕后，设置 intake_complete=true。',
+      parameters: {
+        type: 'object',
+        properties: {
+          // 基础信息
+          birth_year: { type: 'number', description: '出生年份（公历）' },
+          birth_month: { type: 'number', description: '出生月份（公历）' },
+          birth_day: { type: 'number', description: '出生日期（公历）' },
+          birth_hour: { type: 'number', description: '出生小时（24小时制）' },
+          birth_minute: { type: 'number', description: '出生分钟' },
+          gender: { type: 'string', enum: ['male', 'female'], description: '性别' },
+          birth_city: { type: 'string', description: '出生城市' },
+
+          // 第一类：根源信息
+          father_birth_year: { type: 'number', description: '父亲出生年份' },
+          mother_birth_year: { type: 'number', description: '母亲出生年份' },
+          parent_notes: { type: 'string', description: '关于父母的补充说明' },
+
+          // 第二类：结构信息
+          sibling_rank: { type: 'number', description: '排行第几' },
+          total_siblings: { type: 'number', description: '兄弟姐妹总数（含自己）' },
+          sibling_birth_years: {
+            type: 'array', items: { type: 'number' },
+            description: '兄弟姐妹出生年份列表',
+          },
+          is_twin: { type: 'boolean', description: '是否双胞胎' },
+          twin_birth_minute_diff: { type: 'number', description: '双胞胎出生时间差（分钟）' },
+          sibling_notes: { type: 'string', description: '关于兄弟姐妹的补充说明' },
+
+          // 第三类：应期信息
+          life_events: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                year: { type: 'number', description: '事件年份' },
+                category: {
+                  type: 'string',
+                  enum: ['career', 'education', 'marriage', 'health', 'wealth', 'family', 'other'],
+                  description: '事件类别',
+                },
+                description: { type: 'string', description: '事件描述' },
+                is_positive: { type: 'boolean', description: '是否为正面事件' },
+              },
+              required: ['year', 'category', 'description'],
+            },
+            description: '重大人生事件列表',
+          },
+
+          // 缘主关注
+          concerns: {
+            type: 'array', items: { type: 'string' },
+            description: '缘主最关心的领域列表（如：事业、财运、感情、健康、学业）',
+          },
+          specific_question: { type: 'string', description: '缘主具体想问的问题' },
+
+          // 采集状态
+          intake_complete: { type: 'boolean', description: '信息采集是否完成，设为 true 表示可以开始排盘分析' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function' as const,
+    function: {
+      name: 'get_profile',
+      description: '获取当前已采集的缘主画像信息，查看采集进度和已有数据。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  // ---- 排盘工具 ----
   {
     type: 'function' as const,
     function: {
       name: 'paipan',
-      description: '八字排盘：根据出生时间和地点，计算完整的四柱八字命盘。返回四柱、藏干、十神、大运、流年、神煞、五行分析等全部信息。',
+      description: '八字排盘：根据缘主画像中的出生信息，计算完整的四柱八字命盘。调用前应确保 update_profile 已收集到完整的出生信息。排盘结果会自动与缘主画像关联。',
       parameters: {
         type: 'object',
         properties: {
@@ -88,6 +169,7 @@ export const TOOLS = [
       },
     },
   },
+  // ---- Skill 系统 ----
   {
     type: 'function' as const,
     function: {
@@ -106,7 +188,7 @@ export const TOOLS = [
     type: 'function' as const,
     function: {
       name: 'get_chart_context',
-      description: '获取当前命盘的结构化上下文数据（用于命之书/运之书撰写）。type=ming 返回先天特质分析所需数据，type=yun 返回大运流年分析所需数据。',
+      description: '获取当前命盘的结构化上下文数据（用于命之书/运之书撰写）。会自动附带缘主画像中的纬线信息（父母年命、排行、重大事件等），使分析更具针对性。type=ming 返回先天特质分析所需数据，type=yun 返回大运流年分析所需数据。',
       parameters: {
         type: 'object',
         properties: {
@@ -140,6 +222,7 @@ export const TOOLS = [
 // ============================================================
 
 let currentChart: BaziChart | null = null;
+let currentProfile: UserProfile | null = null;
 let outputDir: string = getDefaultOutputDir();
 
 export function getCurrentChart(): BaziChart | null {
@@ -150,8 +233,101 @@ export function setCurrentChart(chart: BaziChart): void {
   currentChart = chart;
 }
 
+export function getCurrentProfile(): UserProfile | null {
+  return currentProfile;
+}
+
+export function setCurrentProfile(profile: UserProfile): void {
+  currentProfile = profile;
+}
+
 export function setOutputDir(dir: string): void {
   outputDir = dir;
+}
+
+// ============================================================
+// 辅助：年份 → 干支
+// ============================================================
+
+function yearToGanZhi(year: number): string {
+  const stemIdx = (year - 4) % 10;
+  const branchIdx = (year - 4) % 12;
+  return `${TIAN_GAN[stemIdx >= 0 ? stemIdx : stemIdx + 10]}${DI_ZHI[branchIdx >= 0 ? branchIdx : branchIdx + 12]}`;
+}
+
+// ============================================================
+// 缘主画像序列化（用于注入上下文）
+// ============================================================
+
+/**
+ * 将缘主画像序列化为 Markdown 格式，供 LLM 和命之书/运之书使用
+ */
+export function formatProfileContext(profile: UserProfile): string {
+  let ctx = '# 缘主画像（纬线信息）\n\n';
+
+  // 第一类：根源信息
+  if (profile.parents) {
+    ctx += '## 第一类：根源信息（定根基）\n';
+    const p = profile.parents;
+    if (p.fatherBirthYear) {
+      ctx += `- 父亲年命：${p.fatherBirthYear}年（${p.fatherGanZhi || yearToGanZhi(p.fatherBirthYear)}年）\n`;
+    }
+    if (p.motherBirthYear) {
+      ctx += `- 母亲年命：${p.motherBirthYear}年（${p.motherGanZhi || yearToGanZhi(p.motherBirthYear)}年）\n`;
+    }
+    if (p.notes) {
+      ctx += `- 补充说明：${p.notes}\n`;
+    }
+    ctx += '\n';
+  }
+
+  // 第二类：结构信息
+  if (profile.siblings) {
+    ctx += '## 第二类：结构信息（定太极点）\n';
+    const s = profile.siblings;
+    ctx += `- 排行：第${s.rank}（共${s.totalSiblings}个兄弟姐妹）\n`;
+    if (s.isTwin) {
+      ctx += `- 双胞胎：是`;
+      if (s.twinBirthMinuteDiff) {
+        ctx += `（出生时间差 ${s.twinBirthMinuteDiff} 分钟）`;
+      }
+      ctx += '\n';
+    }
+    if (s.siblingBirthYears && s.siblingBirthYears.length > 0) {
+      const siblingGZ = s.siblingBirthYears.map(y => `${y}年(${yearToGanZhi(y)})`).join('、');
+      ctx += `- 兄弟姐妹出生年份：${siblingGZ}\n`;
+    }
+    if (s.notes) {
+      ctx += `- 补充说明：${s.notes}\n`;
+    }
+    ctx += '\n';
+  }
+
+  // 第三类：应期信息
+  if (profile.lifeEvents && profile.lifeEvents.length > 0) {
+    ctx += '## 第三类：应期信息（定刻度）\n';
+    const categoryMap: Record<string, string> = {
+      career: '事业', education: '学业', marriage: '婚恋',
+      health: '健康', wealth: '财运', family: '家庭', other: '其他',
+    };
+    for (const ev of profile.lifeEvents) {
+      const cat = categoryMap[ev.category] || ev.category;
+      const nature = ev.isPositive === true ? '（吉）' : ev.isPositive === false ? '（凶）' : '';
+      ctx += `- ${ev.year}年【${cat}${nature}】：${ev.description}\n`;
+    }
+    ctx += '\n';
+  }
+
+  // 缘主关注
+  if (profile.concerns && profile.concerns.length > 0) {
+    ctx += '## 缘主关注\n';
+    ctx += `- 关心领域：${profile.concerns.join('、')}\n`;
+  }
+  if (profile.specificQuestion) {
+    ctx += `- 具体问题：${profile.specificQuestion}\n`;
+  }
+
+  return ctx;
 }
 
 // ============================================================
@@ -163,6 +339,10 @@ export function setOutputDir(dir: string): void {
  */
 export async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
   switch (name) {
+    case 'update_profile':
+      return executeUpdateProfile(args);
+    case 'get_profile':
+      return executeGetProfile();
     case 'paipan':
       return executePaipan(args);
     case 'analyze_liunian':
@@ -181,7 +361,151 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
 }
 
 // ============================================================
-// 工具实现
+// 缘主画像工具实现
+// ============================================================
+
+function executeUpdateProfile(args: Record<string, unknown>): string {
+  // 初始化或增量更新
+  if (!currentProfile) {
+    currentProfile = {
+      birthYear: 0, birthMonth: 0, birthDay: 0,
+      birthHour: 0, gender: 'male',
+    };
+  }
+
+  // 基础信息
+  if (args.birth_year !== undefined) currentProfile.birthYear = args.birth_year as number;
+  if (args.birth_month !== undefined) currentProfile.birthMonth = args.birth_month as number;
+  if (args.birth_day !== undefined) currentProfile.birthDay = args.birth_day as number;
+  if (args.birth_hour !== undefined) currentProfile.birthHour = args.birth_hour as number;
+  if (args.birth_minute !== undefined) currentProfile.birthMinute = args.birth_minute as number;
+  if (args.gender !== undefined) currentProfile.gender = args.gender as 'male' | 'female';
+  if (args.birth_city !== undefined) currentProfile.birthCity = args.birth_city as string;
+
+  // 第一类：根源信息
+  if (args.father_birth_year !== undefined || args.mother_birth_year !== undefined || args.parent_notes !== undefined) {
+    if (!currentProfile.parents) currentProfile.parents = {};
+    if (args.father_birth_year !== undefined) {
+      currentProfile.parents.fatherBirthYear = args.father_birth_year as number;
+      currentProfile.parents.fatherGanZhi = yearToGanZhi(args.father_birth_year as number);
+    }
+    if (args.mother_birth_year !== undefined) {
+      currentProfile.parents.motherBirthYear = args.mother_birth_year as number;
+      currentProfile.parents.motherGanZhi = yearToGanZhi(args.mother_birth_year as number);
+    }
+    if (args.parent_notes !== undefined) {
+      currentProfile.parents.notes = args.parent_notes as string;
+    }
+  }
+
+  // 第二类：结构信息
+  if (args.sibling_rank !== undefined || args.total_siblings !== undefined || args.is_twin !== undefined) {
+    if (!currentProfile.siblings) {
+      currentProfile.siblings = { rank: 1, totalSiblings: 1 };
+    }
+    if (args.sibling_rank !== undefined) currentProfile.siblings.rank = args.sibling_rank as number;
+    if (args.total_siblings !== undefined) currentProfile.siblings.totalSiblings = args.total_siblings as number;
+    if (args.sibling_birth_years !== undefined) currentProfile.siblings.siblingBirthYears = args.sibling_birth_years as number[];
+    if (args.is_twin !== undefined) currentProfile.siblings.isTwin = args.is_twin as boolean;
+    if (args.twin_birth_minute_diff !== undefined) currentProfile.siblings.twinBirthMinuteDiff = args.twin_birth_minute_diff as number;
+    if (args.sibling_notes !== undefined) currentProfile.siblings.notes = args.sibling_notes as string;
+  }
+
+  // 第三类：应期信息
+  if (args.life_events !== undefined) {
+    const events = args.life_events as LifeEvent[];
+    if (!currentProfile.lifeEvents) currentProfile.lifeEvents = [];
+    currentProfile.lifeEvents.push(...events);
+  }
+
+  // 缘主关注
+  if (args.concerns !== undefined) currentProfile.concerns = args.concerns as string[];
+  if (args.specific_question !== undefined) currentProfile.specificQuestion = args.specific_question as string;
+
+  // 采集状态
+  if (args.intake_complete !== undefined) currentProfile.intakeComplete = args.intake_complete as boolean;
+
+  // 计算经度（如果有城市信息）
+  if (currentProfile.birthCity) {
+    currentProfile.birthLongitude = CITY_LONGITUDE[currentProfile.birthCity] || currentProfile.birthLongitude;
+  }
+
+  // 返回采集进度
+  const progress = getIntakeProgress(currentProfile);
+  return JSON.stringify({
+    success: true,
+    message: '缘主画像已更新',
+    profile: currentProfile,
+    progress,
+  }, null, 2);
+}
+
+function executeGetProfile(): string {
+  if (!currentProfile) {
+    return JSON.stringify({
+      message: '尚未开始采集缘主信息',
+      profile: null,
+      progress: {
+        hasBasicInfo: false,
+        hasParentInfo: false,
+        hasSiblingInfo: false,
+        hasLifeEvents: false,
+        hasConcerns: false,
+        intakeComplete: false,
+        completeness: '0%',
+      },
+    });
+  }
+
+  return JSON.stringify({
+    profile: currentProfile,
+    progress: getIntakeProgress(currentProfile),
+  }, null, 2);
+}
+
+/**
+ * 计算信息采集进度
+ */
+function getIntakeProgress(profile: UserProfile): Record<string, unknown> {
+  const hasBasicInfo = !!(profile.birthYear && profile.birthMonth && profile.birthDay && profile.birthHour && profile.gender);
+  const hasBirthCity = !!profile.birthCity;
+  const hasParentInfo = !!(profile.parents && (profile.parents.fatherBirthYear || profile.parents.motherBirthYear));
+  const hasSiblingInfo = !!(profile.siblings && profile.siblings.rank && profile.siblings.totalSiblings);
+  const hasLifeEvents = !!(profile.lifeEvents && profile.lifeEvents.length > 0);
+  const hasConcerns = !!(profile.concerns && profile.concerns.length > 0);
+
+  // 必填项权重 60%，选填项权重 40%
+  let score = 0;
+  if (hasBasicInfo) score += 30;    // 基础八字信息（必填核心）
+  if (hasBirthCity) score += 10;    // 出生地（重要）
+  if (profile.gender) score += 5;   // 性别
+  if (hasParentInfo) score += 15;   // 父母年命
+  if (hasSiblingInfo) score += 10;  // 排行信息
+  if (hasLifeEvents) score += 20;   // 重大事件（核心纬线）
+  if (hasConcerns) score += 10;     // 关注领域
+
+  return {
+    hasBasicInfo,
+    hasBirthCity,
+    hasParentInfo,
+    hasSiblingInfo,
+    hasLifeEvents,
+    hasConcerns,
+    intakeComplete: !!profile.intakeComplete,
+    completeness: `${Math.min(score, 100)}%`,
+    missingRequired: !hasBasicInfo ? ['出生年月日时', '性别'] : [],
+    missingRecommended: [
+      ...(!hasBirthCity ? ['出生城市'] : []),
+      ...(!hasParentInfo ? ['父母出生年份'] : []),
+      ...(!hasSiblingInfo ? ['兄弟姐妹排行'] : []),
+      ...(!hasLifeEvents ? ['重大人生事件'] : []),
+      ...(!hasConcerns ? ['关心的领域'] : []),
+    ],
+  };
+}
+
+// ============================================================
+// 排盘工具实现（增强：关联缘主画像）
 // ============================================================
 
 function executePaipan(args: Record<string, unknown>): string {
@@ -205,6 +529,18 @@ function executePaipan(args: Record<string, unknown>): string {
   try {
     const chart = paipan(input);
     currentChart = chart;
+
+    // 同步更新画像中的基础信息（如果画像存在）
+    if (currentProfile) {
+      currentProfile.birthYear = input.year;
+      currentProfile.birthMonth = input.month;
+      currentProfile.birthDay = input.day;
+      currentProfile.birthHour = input.hour;
+      currentProfile.birthMinute = input.minute;
+      currentProfile.gender = input.gender;
+      if (city) currentProfile.birthCity = city;
+      if (longitude) currentProfile.birthLongitude = longitude;
+    }
 
     const formatted = formatChart(chart);
     return JSON.stringify({
@@ -286,15 +622,24 @@ function executeGetChartContext(args: Record<string, unknown>): string {
 
   const type = args.type as string;
 
+  let chartContext: string;
   if (type === 'ming') {
-    return buildMingBookContext(currentChart);
+    chartContext = buildMingBookContext(currentChart);
   } else if (type === 'yun') {
     const startYear = args.start_year as number | undefined;
     const endYear = args.end_year as number | undefined;
-    return buildYunBookContext(currentChart, startYear, endYear);
+    chartContext = buildYunBookContext(currentChart, startYear, endYear);
+  } else {
+    return JSON.stringify({ error: `未知上下文类型: ${type}` });
   }
 
-  return JSON.stringify({ error: `未知上下文类型: ${type}` });
+  // 注入缘主画像纬线信息
+  if (currentProfile) {
+    const profileContext = formatProfileContext(currentProfile);
+    chartContext += '\n\n' + profileContext;
+  }
+
+  return chartContext;
 }
 
 function executeSaveDocument(args: Record<string, unknown>): string {

@@ -1,12 +1,13 @@
 // ============================================================
 // FateRead - Agent Runtime (Agent 核心运行时)
-// 支持 Skill 系统：启动时加载 skills → 注入 prompt → 运行时按需读取
+// 支持 Skill 系统 + 缘主画像采集
 // ============================================================
 
 import OpenAI from 'openai';
 import { SYSTEM_PROMPT } from './prompt.js';
-import { TOOLS, executeTool, getCurrentChart, setCurrentChart, initSkills, getLoadedSkills } from './tools.js';
+import { TOOLS, executeTool, getCurrentChart, setCurrentChart, getCurrentProfile, initSkills, getLoadedSkills } from './tools.js';
 import { buildSkillCatalog } from '../skills/loader.js';
+import type { UserProfile } from '../core/types.js';
 
 export interface AgentOptions {
   apiKey?: string;
@@ -26,7 +27,7 @@ export interface Message {
 
 /**
  * FateRead Agent
- * 管理对话流程、工具调用、LLM 交互、Skill 加载
+ * 管理对话流程、工具调用、LLM 交互、Skill 加载、缘主画像采集
  */
 export class FateReadAgent {
   private client: OpenAI;
@@ -160,6 +161,16 @@ export class FateReadAgent {
           } catch { /* ignore */ }
         }
 
+        // 如果是更新画像，展示采集进度
+        if (funcName === 'update_profile') {
+          try {
+            const parsed = JSON.parse(result);
+            if (parsed.progress) {
+              yield `\n📋 信息采集进度: ${parsed.progress.completeness}\n`;
+            }
+          } catch { /* ignore */ }
+        }
+
         // 如果是保存文档，通知用户
         if (funcName === 'save_document') {
           try {
@@ -229,5 +240,12 @@ export class FateReadAgent {
    */
   getChart() {
     return getCurrentChart();
+  }
+
+  /**
+   * 获取当前缘主画像
+   */
+  getProfile(): UserProfile | null {
+    return getCurrentProfile();
   }
 }

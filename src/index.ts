@@ -2,7 +2,7 @@
 export { paipan, formatChart } from './core/index.js';
 export { FateReadAgent } from './agent/agent.js';
 export type { AgentOptions } from './agent/agent.js';
-export type { BaziChart, PaipanInput } from './core/types.js';
+export type { BaziChart, PaipanInput, UserProfile, ParentInfo, SiblingInfo, LifeEvent } from './core/types.js';
 
 // Skill system
 export { loadSkills, getSkill, buildSkillCatalog, saveDocument, getDefaultSkillsDir, getDefaultOutputDir } from './skills/index.js';
