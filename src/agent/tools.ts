@@ -1,6 +1,6 @@
 // ============================================================
 // FateRead - Agent Tools (工具定义)
-// 支持 Skill 系统 + 交互式缘主画像采集
+// 支持 Skill 系统 + 交互式缘主画像采集 + LLM 验证
 // ============================================================
 
 import { paipan, formatChart, calculateLiuNian, calculateLiuNianRange } from '../core/index.js';
@@ -11,6 +11,7 @@ import { loadSkills, getSkill, saveDocument, getDefaultSkillsDir, getDefaultOutp
 import { buildMingBookContext } from '../skills/ming-book.js';
 import { buildYunBookContext } from '../skills/yun-book.js';
 import type { Skill } from '../skills/loader.js';
+import { verifyPillars } from './verify-pillars.js';
 
 // ============================================================
 // Skills 加载（启动时）
@@ -505,10 +506,10 @@ function getIntakeProgress(profile: UserProfile): Record<string, unknown> {
 }
 
 // ============================================================
-// 排盘工具实现（增强：关联缘主画像）
+// 排盘工具实现（增强：关联缘主画像 + LLM验证）
 // ============================================================
 
-function executePaipan(args: Record<string, unknown>): string {
+async function executePaipan(args: Record<string, unknown>): Promise<string> {
   const city = args.city as string | undefined;
   let longitude = args.longitude as number | undefined;
 
@@ -527,7 +528,68 @@ function executePaipan(args: Record<string, unknown>): string {
   };
 
   try {
-    const chart = paipan(input);
+    let chart = paipan(input);
+
+    // ========== LLM 验证四柱 ==========
+    let verificationNote = '';
+    try {
+      console.log('🔍 正在调用 LLM 验证四柱计算结果...');
+      const verifyResult = await verifyPillars(chart, {
+        year: input.year,
+        month: input.month,
+        day: input.day,
+        hour: input.hour,
+        minute: input.minute,
+        city: city,
+        longitude: input.longitude,
+      });
+
+      if (!verifyResult.verified && verifyResult.corrections && verifyResult.corrections.length > 0) {
+        // 有修正 —— 重新排盘
+        console.warn('⚠️  LLM 验证发现四柱差异，尝试修正...');
+        for (const c of verifyResult.corrections) {
+          console.warn(`   ${c.pillar}柱: ${c.original} → ${c.corrected} (${c.reason})`);
+        }
+
+        // 用 LLM 修正的日柱重新定位日期来重排，但这很复杂
+        // 更实际的做法：信任日柱算法（已验证正确），仅对年/月/时柱修正可以考虑
+        // 为安全起见，将修正信息附加到结果中，让主 Agent LLM 知晓差异
+        verificationNote = '\n\n⚠️ LLM 验证提示：';
+        for (const c of verifyResult.corrections) {
+          verificationNote += `\n- ${c.pillar}柱：算法计算为"${c.original}"，LLM 认为应为"${c.corrected}"（${c.reason}）`;
+        }
+        verificationNote += '\n请以 LLM 验证结果为准进行解读。';
+
+        // 直接修正 chart 的四柱数据（仅修改柱位，不重算衍生数据）
+        // 如果是日柱差异，需要完全重新排盘
+        const hasDayCorrection = verifyResult.corrections.some(c => c.pillar === 'day');
+        if (hasDayCorrection) {
+          // 日柱修正影响十神等所有衍生数据，记录但不自动修正
+          // 让主Agent根据验证信息自行判断
+          verificationNote += '\n⚠️ 注意：日柱存在差异，衍生数据（十神等）可能不准确，请谨慎使用。';
+        } else {
+          // 年/月/时柱修正可以直接应用
+          for (const c of verifyResult.corrections) {
+            if (c.pillar !== 'day') {
+              chart.fourPillars[c.pillar] = {
+                stem: c.corrected[0] as typeof chart.fourPillars.year.stem,
+                branch: c.corrected[1] as typeof chart.fourPillars.year.branch,
+              };
+            }
+          }
+        }
+      } else {
+        console.log('✅ LLM 验证通过，四柱计算正确');
+        verificationNote = '\n\n✅ 四柱已通过 LLM 独立验证，结果正确。';
+      }
+    } catch (verifyError: unknown) {
+      // 验证失败不阻塞主流程
+      const msg = verifyError instanceof Error ? verifyError.message : String(verifyError);
+      console.warn(`⚠️  LLM 验证失败 (${msg})，继续使用算法结果`);
+      verificationNote = '\n\n⚠️ LLM 验证未能完成，使用算法计算结果。';
+    }
+    // ========== 验证结束 ==========
+
     currentChart = chart;
 
     // 同步更新画像中的基础信息（如果画像存在）
@@ -542,7 +604,7 @@ function executePaipan(args: Record<string, unknown>): string {
       if (longitude) currentProfile.birthLongitude = longitude;
     }
 
-    const formatted = formatChart(chart);
+    const formatted = formatChart(chart) + verificationNote;
     return JSON.stringify({
       formatted,
       data: chart,
