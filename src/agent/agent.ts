@@ -14,10 +14,11 @@ export interface AgentOptions {
 
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | null;
   tool_calls?: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[];
   tool_call_id?: string;
   name?: string;
+  reasoning_content?: string; // DeepSeek thinking mode
 }
 
 /**
@@ -57,16 +58,24 @@ export class FateReadAgent {
       if (!response.tool_calls || response.tool_calls.length === 0) {
         // 没有工具调用，返回最终回复
         const content = response.content || '';
-        this.messages.push({ role: 'assistant', content });
+        const msg: Message = { role: 'assistant', content };
+        if (response.reasoning_content) {
+          msg.reasoning_content = response.reasoning_content;
+        }
+        this.messages.push(msg);
         return content;
       }
 
-      // 有工具调用
-      this.messages.push({
+      // 有工具调用，保存 assistant 消息（含 reasoning_content）
+      const assistantMsg: Message = {
         role: 'assistant',
         content: response.content || '',
         tool_calls: response.tool_calls,
-      });
+      };
+      if (response.reasoning_content) {
+        assistantMsg.reasoning_content = response.reasoning_content;
+      }
+      this.messages.push(assistantMsg);
 
       // 执行工具
       for (const toolCall of response.tool_calls) {
@@ -99,17 +108,25 @@ export class FateReadAgent {
 
       if (!response.tool_calls || response.tool_calls.length === 0) {
         const content = response.content || '';
-        this.messages.push({ role: 'assistant', content });
+        const msg: Message = { role: 'assistant', content };
+        if (response.reasoning_content) {
+          msg.reasoning_content = response.reasoning_content;
+        }
+        this.messages.push(msg);
         yield content;
         return;
       }
 
       // 工具调用
-      this.messages.push({
+      const assistantMsg: Message = {
         role: 'assistant',
         content: response.content || '',
         tool_calls: response.tool_calls,
-      });
+      };
+      if (response.reasoning_content) {
+        assistantMsg.reasoning_content = response.reasoning_content;
+      }
+      this.messages.push(assistantMsg);
 
       for (const toolCall of response.tool_calls) {
         const funcName = toolCall.function.name;
@@ -141,23 +158,42 @@ export class FateReadAgent {
 
   /**
    * 调用 LLM
+   * DeepSeek V4 Pro 的 thinking 模式会返回 reasoning_content，
+   * 必须在后续请求中原样回传该字段。
    */
   private async callLLM(): Promise<{
     content: string | null;
+    reasoning_content?: string;
     tool_calls?: OpenAI.Chat.Completions.ChatCompletionMessageToolCall[];
   }> {
+    // 构建请求消息，确保 reasoning_content 被正确传递
+    const requestMessages = this.messages.map(msg => {
+      const m: Record<string, unknown> = {
+        role: msg.role,
+        content: msg.content,
+      };
+      if (msg.tool_calls) m.tool_calls = msg.tool_calls;
+      if (msg.tool_call_id) m.tool_call_id = msg.tool_call_id;
+      if (msg.name) m.name = msg.name;
+      // 关键：回传 reasoning_content
+      if (msg.reasoning_content) m.reasoning_content = msg.reasoning_content;
+      return m;
+    });
+
     const response = await this.client.chat.completions.create({
       model: this.model,
-      messages: this.messages as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
+      messages: requestMessages as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
       tools: TOOLS,
       tool_choice: 'auto',
-      temperature: 0.7,
     });
 
     const choice = response.choices[0];
+    const message = choice.message as unknown as Record<string, unknown>;
+
     return {
-      content: choice.message.content,
-      tool_calls: choice.message.tool_calls,
+      content: (message.content as string) || null,
+      reasoning_content: (message.reasoning_content as string) || undefined,
+      tool_calls: message.tool_calls as OpenAI.Chat.Completions.ChatCompletionMessageToolCall[] | undefined,
     };
   }
 
