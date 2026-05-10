@@ -55,6 +55,15 @@ OPENAI_BASE_URL=https://api.deepseek.com
 
 # 模型名称（默认 deepseek-v4-pro）
 FATEREAD_MODEL=deepseek-v4-pro
+
+# 多流派子 Agent 模型（可选，默认同 FATEREAD_MODEL）
+# FATEREAD_SCHOOL_MODEL=deepseek-v4-pro
+
+# 辩论裁判模型（可选，默认同 FATEREAD_MODEL）
+# FATEREAD_JUDGE_MODEL=deepseek-v4-pro
+
+# 四柱验证模型（可选，默认同 FATEREAD_MODEL）
+# FATEREAD_VERIFY_MODEL=deepseek-v4-pro
 ```
 
 ### 切换其他模型
@@ -158,13 +167,66 @@ src/
 │   ├── yun-book.ts         # 运之书上下文构建
 │   └── index.ts            # Skills 入口
 ├── agent/             # Agent 运行时
-│   ├── tools.ts            # 工具定义（含 intake 画像采集）
-│   ├── prompt.ts           # System Prompt（命理师人设 + 采集流程）
-│   └── agent.ts            # Agent 核心（对话+工具调用循环）
+│   ├── tools.ts            # 工具定义（含 intake 画像采集 + 多流派分析）
+│   ├── prompt.ts           # System Prompt（命理师人设 + 采集流程 + 三派协调）
+│   ├── agent.ts            # Agent 核心（对话+工具调用循环）
+│   ├── verify-pillars.ts   # LLM 四柱验证模块
+│   └── schools/            # 多流派子 Agent 系统
+│       ├── types.ts             # 流派间通信协议类型定义
+│       ├── base-school.ts       # 子 Agent 抽象基类
+│       ├── ziping-agent.ts      # 子平八字子 Agent
+│       ├── ziwei-agent.ts       # 紫微斗数子 Agent
+│       ├── mangpai-agent.ts     # 盲派命理子 Agent
+│       ├── debate.ts            # 辩论协调机制
+│       ├── orchestrator.ts      # 主 Agent 协调器
+│       └── index.ts             # 模块入口
 └── cli.ts             # CLI 入口（加载 .env + 交互界面）
 ```
 
 ### 核心设计
+
+**一主三辅多流派架构 (Multi-School Agent System)**
+
+FateRead 采用"一主三辅 + 辩论协调"的 Agent 架构，三大命理流派各自独立分析后通过辩论达成共识：
+
+```
+                        ┌─────────────┐
+                        │  Orchestrator │  主 Agent（协调器）
+                        │  （主持人）   │
+                        └──────┬──────┘
+               ┌───────────────┼───────────────┐
+               ▼               ▼               ▼
+        ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+        │  子平八字     │ │  紫微斗数    │ │  盲派命理    │  三个子 Agent
+        │  ZipingAgent │ │  ZiweiAgent │ │ MangpaiAgent│  并行分析
+        └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
+               │               │               │
+               └───────────────┼───────────────┘
+                               ▼
+                     ┌──────────────────┐
+                     │  Debate Protocol  │  分歧维度辩论
+                     │  （辩论协调器）    │
+                     └────────┬─────────┘
+                              ▼
+                     ┌──────────────────┐
+                     │  Synthesized      │  三派共识报告
+                     │  Report           │
+                     └──────────────────┘
+```
+
+| 流派 | 核心理论 | 视角特色 |
+|---|---|---|
+| 子平八字 | 格局法 + 十神体系 + 调候取用 | 日主为中心，论生克制化 |
+| 紫微斗数 | 星曜 + 十二宫 + 四化飞星 | 命宫为中心，论星曜组合 |
+| 盲派命理 | 做功论 + 象法 + 宾主体系 | 做功为核心，精准应期 |
+
+**辩论协调机制 (Debate Protocol)**
+
+当三个流派的分析出现分歧时，自动触发辩论：
+1. **识别分歧**：对比各维度的关键词重叠度和信心度差异
+2. **两轮辩论**：各流派看到对方立场后给出反驳或让步
+3. **裁判综合**：独立的裁判 LLM 综合多方观点，达成最终共识
+4. **透明输出**：辩论过程和少数派保留意见一并展示
 
 **Intake System（缘主画像采集）**
 
