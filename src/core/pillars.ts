@@ -61,22 +61,19 @@ export function getMonthPillar(yearStem: TianGan, monthIndex: number): Pillar {
 // ============================================================
 
 /**
- * 计算日柱（使用蔡勒公式变体）
- * 基准：1900年1月1日 = 甲戌日 (index = 10 in 甲子 cycle)
- * 实际：1900-01-01 的干支序号 = 10 (甲=0,戌=10 → 但60甲子中甲戌=10)
+ * 计算日柱
  *
- * 使用更精确的方式：基于已知参考日推算
- * 2000年1月1日 = 甲戌日，甲子序号 = 10
+ * 原理：儒略日数 (JDN) 与六十甲子的固定映射关系
+ * 天文学已知：JDN = 0 对应辛亥日（六十甲子序号 47）
+ * 通用公式：甲子序号 = (JDN + 47) % 60
+ *
+ * 等价地，以 2000-01-01 (JDN=2451544) 为基准：
+ * 2000-01-01 = 乙卯日（甲子序号 51）
  */
 export function getDayPillar(year: number, month: number, day: number): Pillar {
-  // 使用儒略日数来计算
-  // 基准：公元 2000年1月1日 (JDN 2451544) 是甲戌日
-  // 甲戌在六十甲子中的序号 = 10
+  // (JDN + 47) % 60 等价于 ((JDN - 2451544 + 51) % 60)
   const jdn = getJulianDayNumber(year, month, day);
-  const baseJdn = 2451544; // floor(JD of 2000-01-01)
-  const baseIndex = 10; // 甲戌
-
-  const index = ((jdn - baseJdn + baseIndex) % 60 + 60) % 60;
+  const index = ((jdn + 47) % 60 + 60) % 60;
   const stemIdx = index % 10;
   const branchIdx = index % 12;
 
