@@ -11,9 +11,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const envPath = resolve(__dirname, '..', '.env');
-config({ path: envPath });
+config({ path: envPath, quiet: true });
 
-import { createInterface } from 'readline';
+import { createInterface, emitKeypressEvents } from 'readline';
+import chalk from 'chalk';
+import { search } from '@inquirer/prompts';
 import { FateReadAgent } from './agent/agent.js';
 import type { StreamEvent } from './agent/agent.js';
 import { paipan, formatChart } from './core/index.js';
@@ -71,83 +73,210 @@ const HELP = `
   > 分析一下我2025到2030年的运势
 `;
 
-async function main() {
-  const args = process.argv.slice(2);
+// ============================================================
+// Command menu
+// ============================================================
 
-  // --offline mode
-  if (args.includes('--offline') || args.includes('-o')) {
-    await offlineMode();
-    return;
+interface Command {
+  name: string;
+  value: string;
+  description: string;
+}
+
+const COMMANDS: Command[] = [
+  { name: '⚙️  /paipan', value: '/paipan', description: '直接排盘（无需 AI，快速查看命盘）' },
+  { name: '🔄 /reset', value: '/reset', description: '重置对话' },
+  { name: '💾 /save', value: '/save', description: '保存当前会话' },
+  { name: '📂 /load', value: '/load', description: '加载之前保存的会话' },
+  { name: '📋 /sessions', value: '/sessions', description: '列出所有保存的会话' },
+  { name: '📊 /tokens', value: '/tokens', description: '查看 Token 使用统计' },
+  { name: '📡 /stream', value: '/stream', description: '切换流式输出模式' },
+  { name: '❓ /help', value: '/help', description: '显示帮助信息' },
+  { name: '🚪 /quit', value: '/quit', description: '退出程序' },
+];
+
+async function showCommandMenu(): Promise<string | null> {
+  try {
+    const cmd = await search({
+      message: '选择命令',
+      source: (term) => {
+        if (!term) return COMMANDS;
+        const t = term.toLowerCase();
+        return COMMANDS.filter(
+          (c) =>
+            c.value.toLowerCase().includes(t) ||
+            c.description.toLowerCase().includes(t) ||
+            c.name.toLowerCase().includes(t),
+        );
+      },
+      pageSize: 9,
+    });
+    return cmd;
+  } catch {
+    // User cancelled (Ctrl+C)
+    return null;
   }
+}
 
-  // --stream / --no-stream flags
-  const useStream = !args.includes('--no-stream');
+// ============================================================
+// Stream event display
+// ============================================================
 
-  // --debate flag
-  const debateMode = args.includes('--debate');
+function displayStreamEvent(event: StreamEvent, thinkingShown: boolean): boolean {
+  switch (event.type) {
+    case 'reasoning':
+      if (!thinkingShown) {
+        process.stdout.write(chalk.gray('\n💭 思考中...\n'));
+        thinkingShown = true;
+      }
+      break;
+    case 'tool_start':
+      process.stdout.write(chalk.blue(`\n⚙️  ${event.content}...`));
+      break;
+    case 'tool_end':
+      if (event.data?.formatted) {
+        process.stdout.write(`\n${event.data.formatted}\n`);
+      } else if (event.data?.agreementRate !== undefined) {
+        process.stdout.write(chalk.yellow(`\n🎭 三派会诊完成 | 一致率: ${event.data.agreementRate}%\n`));
+      } else if (event.data?.progress) {
+        const progress = event.data.progress as Record<string, unknown>;
+        process.stdout.write(chalk.green(`\n📋 ${progress.completeness || '更新完成'}\n`));
+      } else if (event.data?.filepath) {
+        process.stdout.write(chalk.green(`\n💾 已保存: ${event.data.filepath}\n`));
+      }
+      break;
+    case 'text':
+      process.stdout.write(event.content);
+      break;
+    case 'progress':
+      process.stdout.write(chalk.cyan(`\n${event.content}\n`));
+      break;
+    case 'error':
+      process.stdout.write(chalk.red(`\n❌ ${event.content}\n`));
+      break;
+  }
+  return thinkingShown;
+}
 
-  // --school flag
-  const schoolIdx = args.indexOf('--school');
-  let school: SchoolId = 'ziping';
-  if (schoolIdx !== -1 && schoolIdx + 1 < args.length) {
-    const schoolArg = args[schoolIdx + 1].toLowerCase();
-    if (schoolArg === 'ziping' || schoolArg === 'ziwei' || schoolArg === 'mangpai') {
-      school = schoolArg;
-    } else {
-      console.log(`⚠️  未知流派: ${schoolArg}，使用默认流派 子平八字`);
-      console.log(`   可用流派: ziping(子平八字), ziwei(紫微斗数), mangpai(盲派命理)\n`);
+// ============================================================
+// Command separator
+// ============================================================
+
+function sep() {
+  console.log(chalk.dim('─'.repeat(50)));
+}
+
+// ============================================================
+// Keypress-based input loop — intercepts "/" immediately
+// ============================================================
+
+const PROMPT_TEXT = '你 ❯ ';
+
+async function startKeypressLoop(ctx: CommandContext) {
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+
+  let lineBuffer = '';
+
+  const drawPrompt = () => {
+    process.stdout.write('\r\x1b[K' + chalk.green(PROMPT_TEXT) + lineBuffer);
+  };
+
+  drawPrompt();
+
+  const onKeypress = async (str: string, key: { name: string; ctrl: boolean; sequence: string }) => {
+    // Ctrl+C
+    if (key.ctrl && key.name === 'c') {
+      process.stdout.write('\n');
+      process.stdin.setRawMode(false);
+      console.log(chalk.yellow('\n再见！祝您好运！\n'));
+      process.exit(0);
     }
-  }
 
-  // --resume flag
-  const resumeIdx = args.indexOf('--resume');
-  let resumeId: string | null = null;
-  if (resumeIdx !== -1 && resumeIdx + 1 < args.length) {
-    resumeId = args[resumeIdx + 1];
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    console.log(BANNER);
-    console.log('⚠️  未设置 OPENAI_API_KEY。');
-    console.log('   请在项目根目录创建 .env 文件并配置（参考 .env.example）：');
-    console.log('   OPENAI_API_KEY=your_deepseek_api_key\n');
-    console.log('   或使用 --offline 模式仅进行排盘（无 AI 解读）：');
-    console.log('   $ fateread --offline\n');
-    await offlineMode();
-    return;
-  }
-
-  console.log(BANNER);
-  const schoolName = SCHOOL_NAMES[school];
-  const modeLabel = debateMode ? `多流派辩论模式` : `${schoolName}`;
-  console.log(`✨ AI 模式已启用 | 流派: ${modeLabel}`);
-  console.log(`   输入 /help 查看帮助\n`);
-
-  const agent = new FateReadAgent({
-    apiKey,
-    baseUrl: process.env.OPENAI_BASE_URL,
-    model: process.env.FATEREAD_MODEL,
-    school,
-    debate: debateMode,
-  });
-
-  // Resume session if requested
-  if (resumeId) {
-    const loaded = agent.loadSession(resumeId);
-    if (loaded) {
-      console.log(`📂 已恢复会话: ${resumeId}\n`);
-    } else {
-      console.log(`⚠️  未找到会话: ${resumeId}，开始新会话\n`);
+    // Ctrl+D on empty line
+    if (key.name === 'd' && key.ctrl && lineBuffer === '') {
+      process.stdout.write('\n');
+      process.stdin.setRawMode(false);
+      console.log(chalk.yellow('\n再见！祝您好运！\n'));
+      process.exit(0);
     }
-  }
 
-  let streamMode = useStream;
+    // Enter
+    if (key.name === 'return') {
+      process.stdout.write('\n');
+      const input = lineBuffer.trim();
+      lineBuffer = '';
 
+      // Exit raw mode before processing
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+
+      if (input) {
+        // Direct slash commands
+        if (input.startsWith('/')) {
+          await handleCommand(input, ctx);
+        } else {
+          // AI conversation
+          await handleChat(input, ctx.agent, ctx.streamMode);
+        }
+      }
+
+      // Re-enter raw mode
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      drawPrompt();
+      return;
+    }
+
+    // Backspace
+    if (key.name === 'backspace') {
+      if (lineBuffer.length > 0) {
+        lineBuffer = lineBuffer.slice(0, -1);
+        drawPrompt();
+      }
+      return;
+    }
+
+    // Printable character — intercept "/" at start of line
+    if (str && str.length === 1 && str >= ' ') {
+      if (lineBuffer === '' && str === '/') {
+        // Show the "/" then immediately trigger command menu
+        process.stdout.write('/');
+        process.stdout.write('\n');
+        lineBuffer = '';
+
+        // Exit raw mode for inquirer
+        process.stdin.setRawMode(false);
+        process.stdin.pause();
+
+        const cmd = await showCommandMenu();
+        if (cmd) {
+          await handleCommand(cmd, ctx);
+        }
+
+        // Re-enter raw mode
+        process.stdin.setRawMode(true);
+        process.stdin.resume();
+        drawPrompt();
+        return;
+      }
+
+      lineBuffer += str;
+      drawPrompt();
+      return;
+    }
+
+    // Ignore other control characters
+  };
+
+  process.stdin.on('keypress', onKeypress);
+}
+
+async function startReadlineLoop(ctx: CommandContext) {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: '你> ',
+    prompt: chalk.green(PROMPT_TEXT),
   });
 
   rl.prompt();
@@ -159,138 +288,222 @@ async function main() {
       return;
     }
 
-    // Commands
-    if (input === '/quit' || input === '/exit' || input === '/q') {
-      console.log('\n再见！祝您好运！\n');
-      process.exit(0);
+    if (input.startsWith('/')) {
+      await handleCommand(input, ctx);
+    } else {
+      await handleChat(input, ctx.agent, ctx.streamMode);
     }
-
-    if (input === '/help' || input === '/h') {
-      console.log(HELP);
-      rl.prompt();
-      return;
-    }
-
-    if (input === '/reset') {
-      agent.reset();
-      console.log('\n对话已重置。\n');
-      rl.prompt();
-      return;
-    }
-
-    if (input === '/tokens') {
-      console.log('\n' + agent.getTokenReport() + '\n');
-      rl.prompt();
-      return;
-    }
-
-    if (input.startsWith('/save')) {
-      const customId = input.split(/\s+/)[1] || undefined;
-      const filepath = agent.saveSession(customId);
-      console.log(`\n💾 会话已保存: ${filepath}\n`);
-      rl.prompt();
-      return;
-    }
-
-    if (input.startsWith('/load')) {
-      const sessionId = input.split(/\s+/)[1];
-      if (!sessionId) {
-        console.log('\n⚠️  用法: /load <会话ID>\n');
-        rl.prompt();
-        return;
-      }
-      const loaded = agent.loadSession(sessionId);
-      console.log(loaded ? `\n📂 已恢复会话: ${sessionId}\n` : `\n⚠️  未找到会话: ${sessionId}\n`);
-      rl.prompt();
-      return;
-    }
-
-    if (input === '/sessions') {
-      const sessions = listSessions();
-      if (sessions.length === 0) {
-        console.log('\n📭 没有保存的会话\n');
-      } else {
-        console.log('\n📂 已保存的会话:\n');
-        for (const s of sessions) {
-          console.log(`  ${s.id} — ${s.messageCount} 条消息 — ${s.updatedAt}`);
-        }
-        console.log('');
-      }
-      rl.prompt();
-      return;
-    }
-
-    if (input === '/stream') {
-      streamMode = !streamMode;
-      console.log(`\n📡 流式输出: ${streamMode ? '开启' : '关闭'}\n`);
-      rl.prompt();
-      return;
-    }
-
-    if (input === '/paipan') {
-      await interactivePaipan();
-      rl.prompt();
-      return;
-    }
-
-    // AI conversation
-    try {
-      process.stdout.write('\n命理师> ');
-
-      if (streamMode) {
-        let thinkingShown = false;
-        for await (const event of agent.chatStream(input)) {
-          switch (event.type) {
-            case 'reasoning':
-              if (!thinkingShown) {
-                process.stdout.write('\n💭 思考中...\n');
-                thinkingShown = true;
-              }
-              break;
-            case 'tool_start':
-              process.stdout.write(`\n⚙️  ${event.content}...`);
-              break;
-            case 'tool_end':
-              if (event.data?.formatted) {
-                process.stdout.write(`\n${event.data.formatted}\n`);
-              } else if (event.data?.agreementRate !== undefined) {
-                process.stdout.write(`\n🎭 三派会诊完成 | 一致率: ${event.data.agreementRate}%\n`);
-              } else if (event.data?.progress) {
-                const progress = event.data.progress as Record<string, unknown>;
-                process.stdout.write(`\n📋 ${progress.completeness || '更新完成'}\n`);
-              } else if (event.data?.filepath) {
-                process.stdout.write(`\n💾 已保存: ${event.data.filepath}\n`);
-              }
-              break;
-            case 'text':
-              process.stdout.write(event.content);
-              break;
-            case 'progress':
-              process.stdout.write(`\n${event.content}\n`);
-              break;
-            case 'error':
-              process.stdout.write(`\n❌ ${event.content}\n`);
-              break;
-          }
-        }
-        process.stdout.write('\n');
-      } else {
-        process.stdout.write('思考中...\n');
-        const response = await agent.chat(input);
-        process.stdout.write(`\n${response}\n`);
-      }
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error(`\n❌ 错误: ${msg}\n`);
-    }
-
     rl.prompt();
   });
 
   rl.on('close', () => {
-    console.log('\n再见！\n');
+    console.log(chalk.yellow('\n再见！祝您好运！\n'));
     process.exit(0);
   });
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+
+  if (args.includes('--offline') || args.includes('-o')) {
+    await offlineMode();
+    return;
+  }
+
+  const useStream = !args.includes('--no-stream');
+  const debateMode = args.includes('--debate');
+
+  const schoolIdx = args.indexOf('--school');
+  let school: SchoolId = 'ziping';
+  if (schoolIdx !== -1 && schoolIdx + 1 < args.length) {
+    const schoolArg = args[schoolIdx + 1].toLowerCase();
+    if (schoolArg === 'ziping' || schoolArg === 'ziwei' || schoolArg === 'mangpai') {
+      school = schoolArg;
+    } else {
+      console.log(chalk.yellow(`⚠️  未知流派: ${schoolArg}，使用默认流派 子平八字`));
+      console.log(`   可用流派: ziping(子平八字), ziwei(紫微斗数), mangpai(盲派命理)\n`);
+    }
+  }
+
+  const resumeIdx = args.indexOf('--resume');
+  let resumeId: string | null = null;
+  if (resumeIdx !== -1 && resumeIdx + 1 < args.length) {
+    resumeId = args[resumeIdx + 1];
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    console.log(chalk.cyan(BANNER));
+    console.log(chalk.yellow('⚠️  未设置 OPENAI_API_KEY。'));
+    console.log('   请在项目根目录创建 .env 文件并配置（参考 .env.example）：');
+    console.log('   OPENAI_API_KEY=your_deepseek_api_key\n');
+    console.log('   或使用 --offline 模式仅进行排盘（无 AI 解读）：');
+    console.log('   $ fateread --offline\n');
+    await offlineMode();
+    return;
+  }
+
+  console.log(chalk.cyan(BANNER));
+  const schoolName = SCHOOL_NAMES[school];
+  const modeLabel = debateMode ? `多流派辩论模式` : `${schoolName}`;
+  console.log(chalk.green(`✨ AI 模式已启用 | 流派: ${modeLabel}`));
+  console.log(chalk.dim(`   输入 ${chalk.white('/')} 打开命令菜单，输入 ${chalk.white('/help')} 查看帮助\n`));
+
+  const agent = new FateReadAgent({
+    apiKey,
+    baseUrl: process.env.OPENAI_BASE_URL,
+    model: process.env.FATEREAD_MODEL,
+    school,
+    debate: debateMode,
+  });
+
+  if (resumeId) {
+    const loaded = agent.loadSession(resumeId);
+    if (loaded) {
+      console.log(chalk.green(`📂 已恢复会话: ${resumeId}\n`));
+    } else {
+      console.log(chalk.yellow(`⚠️  未找到会话: ${resumeId}，开始新会话\n`));
+    }
+  }
+
+  let streamMode = useStream;
+
+  const ctx: CommandContext = {
+    agent,
+    streamMode,
+    setStreamMode: (v) => { streamMode = v; },
+  };
+
+  if (process.stdin.isTTY) {
+    // Keypress-based input loop — intercepts "/" immediately
+    emitKeypressEvents(process.stdin);
+    await startKeypressLoop(ctx);
+  } else {
+    // Fallback to readline for non-TTY (piped) input
+    await startReadlineLoop(ctx);
+  }
+}
+
+// ============================================================
+// Command handler
+// ============================================================
+
+interface CommandContext {
+  agent: FateReadAgent;
+  streamMode: boolean;
+  setStreamMode: (v: boolean) => void;
+}
+
+async function handleCommand(input: string, ctx: CommandContext): Promise<void> {
+  const { agent, setStreamMode } = ctx;
+  const parts = input.split(/\s+/);
+  const cmd = parts[0];
+
+  if (cmd === '/quit' || cmd === '/exit' || cmd === '/q') {
+    sep();
+    console.log(chalk.yellow('\n再见！祝您好运！\n'));
+    process.exit(0);
+  }
+
+  if (cmd === '/help' || cmd === '/h') {
+    sep();
+    console.log(chalk.cyan(HELP));
+    return;
+  }
+
+  if (cmd === '/reset') {
+    agent.reset();
+    sep();
+    console.log(chalk.green('\n对话已重置。\n'));
+    return;
+  }
+
+  if (cmd === '/tokens') {
+    sep();
+    console.log('\n' + agent.getTokenReport() + '\n');
+    return;
+  }
+
+  if (cmd === '/save') {
+    const customId = parts[1] || undefined;
+    const filepath = agent.saveSession(customId);
+    sep();
+    console.log(chalk.green(`\n💾 会话已保存: ${filepath}\n`));
+    return;
+  }
+
+  if (cmd === '/load') {
+    const sessionId = parts[1];
+    if (!sessionId) {
+      console.log(chalk.yellow('\n⚠️  用法: /load <会话ID>\n'));
+      return;
+    }
+    const loaded = agent.loadSession(sessionId);
+    sep();
+    console.log(
+      loaded
+        ? chalk.green(`\n📂 已恢复会话: ${sessionId}\n`)
+        : chalk.yellow(`\n⚠️  未找到会话: ${sessionId}\n`),
+    );
+    return;
+  }
+
+  if (cmd === '/sessions') {
+    const sessions = listSessions();
+    sep();
+    if (sessions.length === 0) {
+      console.log(chalk.dim('\n📭 没有保存的会话\n'));
+    } else {
+      console.log(chalk.cyan('\n📂 已保存的会话:\n'));
+      for (const s of sessions) {
+        console.log(
+          `  ${chalk.white(s.id)}  ${chalk.dim('—')}  ${chalk.green(String(s.messageCount))} 条消息  ${chalk.dim('—')}  ${chalk.gray(s.updatedAt)}`,
+        );
+      }
+      console.log('');
+    }
+    return;
+  }
+
+  if (cmd === '/stream') {
+    const newMode = !ctx.streamMode;
+    setStreamMode(newMode);
+    sep();
+    console.log(chalk.cyan(`\n📡 流式输出: ${newMode ? chalk.green('开启') : chalk.yellow('关闭')}\n`));
+    return;
+  }
+
+  if (cmd === '/paipan') {
+    await interactivePaipan();
+    return;
+  }
+
+  console.log(chalk.yellow(`\n未知命令: ${input}，输入 / 打开命令菜单\n`));
+}
+
+// ============================================================
+// AI chat handler
+// ============================================================
+
+async function handleChat(input: string, agent: FateReadAgent, streamMode: boolean): Promise<void> {
+  try {
+    process.stdout.write(chalk.white('\n命理师 ❯ '));
+
+    if (streamMode) {
+      let thinkingShown = false;
+      for await (const event of agent.chatStream(input)) {
+        thinkingShown = displayStreamEvent(event, thinkingShown);
+      }
+      process.stdout.write('\n');
+    } else {
+      process.stdout.write(chalk.gray('思考中...\n'));
+      const response = await agent.chat(input);
+      process.stdout.write(`\n${response}\n`);
+    }
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(chalk.red(`\n❌ 错误: ${msg}\n`));
+  }
 }
 
 // ============================================================
@@ -298,9 +511,9 @@ async function main() {
 // ============================================================
 
 async function offlineMode() {
-  console.log(BANNER);
-  console.log('📋 离线排盘模式（无 AI 解读）');
-  console.log('   输入 /help 查看帮助\n');
+  console.log(chalk.cyan(BANNER));
+  console.log(chalk.yellow('📋 离线排盘模式（无 AI 解读）'));
+  console.log(chalk.dim('   输入 /help 查看帮助\n'));
 
   const rl = createInterface({
     input: process.stdin,
@@ -308,12 +521,12 @@ async function offlineMode() {
   });
 
   const ask = (question: string): Promise<string> => {
-    return new Promise(resolve => rl.question(question, resolve));
+    return new Promise(resolve => rl.question(chalk.green(question), resolve));
   };
 
   while (true) {
     try {
-      console.log('─── 请输入出生信息 ───\n');
+      console.log(chalk.cyan('─── 请输入出生信息 ───\n'));
 
       const yearStr = await ask('出生年份（公历，如 1990）: ');
       if (yearStr === '/quit' || yearStr === '/q') break;
@@ -338,16 +551,16 @@ async function offlineMode() {
       const city = cityStr || '北京';
       const longitude = CITY_LONGITUDE[city] || 116.4;
 
-      console.log(`\n正在排盘... (经度: ${longitude}°E)\n`);
+      console.log(chalk.gray(`\n正在排盘... (经度: ${longitude}°E)\n`));
 
-      const input: PaipanInput = { year, month, day, hour, minute, gender, longitude };
-      const chart = paipan(input);
+      const inputPaipan: PaipanInput = { year, month, day, hour, minute, gender, longitude };
+      const chart = paipan(inputPaipan);
       const formatted = formatChart(chart);
       console.log(formatted);
 
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error(`\n❌ 排盘错误: ${msg}\n`);
+      console.error(chalk.red(`\n❌ 排盘错误: ${msg}\n`));
     }
 
     const again = await ask('\n是否继续排盘？(y/n) ');
@@ -355,13 +568,14 @@ async function offlineMode() {
     console.log('');
   }
 
-  console.log('\n再见！\n');
+  console.log(chalk.yellow('\n再见！\n'));
   rl.close();
   process.exit(0);
 }
 
 function interactivePaipan() {
-  console.log('\n此功能请使用 --offline 模式运行\n');
+  sep();
+  console.log(chalk.yellow('\n此功能请使用 --offline 模式运行\n'));
 }
 
 main().catch(console.error);
