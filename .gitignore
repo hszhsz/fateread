@@ -4,3 +4,7 @@ dist/
 .env
 outputs/
 logs/
+
+benchmark/*.js
+benchmark/*.d.ts
+benchmark/*.d.ts.map
