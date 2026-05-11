@@ -6,6 +6,7 @@
 import OpenAI from 'openai';
 import type { BaziChart, UserProfile } from '../../core/types.js';
 import type {
+  SchoolId,
   SchoolAgent,
   SchoolReport,
   AnalysisDimension,
@@ -274,5 +275,107 @@ export class Orchestrator {
 
   getAgents(): SchoolAgent[] {
     return this.agents;
+  }
+
+  getAgent(schoolId: SchoolId): SchoolAgent | undefined {
+    return this.agents.find(a => a.id === schoolId);
+  }
+
+  /**
+   * Single-school analysis — only runs one selected school, no debate.
+   */
+  async analyzeSingle(
+    schoolId: SchoolId,
+    chart: BaziChart,
+    profile: UserProfile | null,
+    dimensions: AnalysisDimension[] = ['personality', 'career', 'wealth', 'marriage', 'health', 'timing', 'overall'],
+  ): Promise<SynthesizedReport> {
+    const agent = this.getAgent(schoolId);
+    if (!agent) throw new Error(`未知流派: ${schoolId}`);
+
+    const startTime = Date.now();
+
+    if (this.config.verbose) {
+      console.log('\n' + '═'.repeat(60));
+      console.log(`🔮 FateRead 单流派分析 — ${agent.name}`);
+      console.log('═'.repeat(60));
+      console.log(`📊 分析维度: ${dimensions.join(', ')}`);
+    }
+
+    const report = await agent.analyze(chart, profile, dimensions, this.config.agentOptions);
+
+    if (this.config.verbose) {
+      console.log(`  ✅ ${agent.name} 分析完成（格局: ${report.patternSummary.slice(0, 30)}...）`);
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+    const synthesized: SynthesizedReport = {
+      schoolReports: [report],
+      finalAnalysis: {
+        patternSummary: `【${report.schoolName}】${report.patternSummary}`,
+        dimensions: report.analyses.map(a => ({
+          dimension: a.dimension,
+          conclusion: a.conclusion,
+          confidence: a.confidence,
+          reasoning: a.reasoning,
+          advice: a.advice,
+          keywords: a.keywords,
+        })),
+        overallAdvice: report.analyses
+          .map(a => a.advice)
+          .filter((a): a is string => !!a)
+          .join('；') || '命局中平，顺其自然为上。',
+      },
+      meta: {
+        agreementRate: 100,
+        debatedDimensions: [],
+        timestamp: new Date().toISOString(),
+      },
+    };
+
+    if (this.config.verbose) {
+      console.log('\n' + '═'.repeat(60));
+      console.log(`🔮 单流派分析完成 (${elapsed}s) — ${agent.name}`);
+      console.log('═'.repeat(60));
+    }
+
+    return synthesized;
+  }
+
+  formatSingleSchoolReport(report: SynthesizedReport): string {
+    const schoolReport = report.schoolReports[0];
+    let md = `# 🔮 ${schoolReport.schoolName} 命盘分析报告\n\n`;
+    md += `> 分析时间: ${report.meta.timestamp}\n\n`;
+    md += '---\n\n';
+
+    md += '## 格局总览\n\n' + report.finalAnalysis.patternSummary + '\n\n';
+
+    if (schoolReport.usefulElements) {
+      md += `- 用神: ${schoolReport.usefulElements}\n`;
+    }
+    if (schoolReport.harmfulElements) {
+      md += `- 忌神: ${schoolReport.harmfulElements}\n`;
+    }
+    if (schoolReport.specialPatterns?.length) {
+      md += `- 特殊格局: ${schoolReport.specialPatterns.join('、')}\n`;
+    }
+    if (schoolReport.overallScore) {
+      md += `- 命局评分: ${schoolReport.overallScore}/100\n`;
+    }
+    md += '\n';
+
+    md += '## 各维度分析\n\n';
+    for (const dim of report.finalAnalysis.dimensions) {
+      if (dim.confidence === 0) continue;
+      md += `### ${dim.dimension}\n\n`;
+      md += `**结论**: ${dim.conclusion}\n\n`;
+      if (dim.reasoning) md += `**推理**: ${dim.reasoning}\n\n`;
+      if (dim.advice) md += `**建议**: ${dim.advice}\n\n`;
+      md += `信心度: ${dim.confidence}% | 关键词: ${dim.keywords.join(', ')}\n\n`;
+    }
+
+    md += '## 综合建议\n\n' + report.finalAnalysis.overallAdvice + '\n';
+    return md;
   }
 }

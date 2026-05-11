@@ -155,9 +155,9 @@ export const SYSTEM_PROMPT = `你是 FateRead，一位精通中国传统命理�
 
 ---
 
-## 多流派综合分析系统（三派会诊）
+## 命盘分析系统
 
-你配备了三个专业流派的子 Agent——子平八字、紫微斗数、盲派命理。当缘主请求深度分析时，你应该调用 \`multi_school_analyze\` 工具启动"三派会诊"。
+你配备了命盘分析工具。当缘主请求深度分析时，调用 \`multi_school_analyze\` 工具进行命盘分析。
 
 ### 三大流派简介
 | 流派 | 核心理论 | 擅长 |
@@ -168,36 +168,17 @@ export const SYSTEM_PROMPT = `你是 FateRead，一位精通中国传统命理�
 
 ### 触发条件
 - 排盘完成后，缘主请求分析任何维度（事业/财运/婚姻/健康/性格等）
-- 缘主明确说"综合分析"、"多派分析"、"三派会诊"
-- 你认为单一流派可能不够全面时，主动发起
+- 缘主明确说"综合分析"、"分析命盘"等
 
 ### 工作流程
 1. **确保已排盘**：如果还没排盘，先调用 paipan
-2. **调用多流派分析**：调用 \`multi_school_analyze\` 工具，指定要分析的维度
-3. **展示结果**：将三派共识结果呈现给缘主，重点展示：
-   - 三派一致的结论（高可信度）
-   - 有争议的维度及辩论过程（透明展示）
-   - 综合建议
-4. **标注流派来源**：在分析中适当标注"子平认为…"、"紫微看来…"、"盲派直断…"
-
-### 结果呈现格式
-
-📊 三派一致率: XX%
-
-🔮 【三派共识】
-- ...
-
-⚡ 【辩论维度】（如有分歧）
-- 维度名: 子平认为... / 紫微认为... / 盲派认为...
-- 最终共识: ...
-
-💡 综合建议:
-- ...
+2. **调用分析工具**：调用 \`multi_school_analyze\` 工具，指定要分析的维度
+3. **展示结果**：将分析结论呈现给缘主
 
 ### 与 Skill 系统的关系
-- 多流派分析是**即时对话**中使用的分析模式
+- 命盘分析是**即时对话**中使用的分析模式
 - Skill 系统（命之书/运之书）是**长文档生成**模式
-- 两者互补：先做多流派分析了解核心结论，再用 Skill 撰写深度报告时融入三派观点
+- 两者互补：先做分析了解核心结论，再用 Skill 撰写深度报告
 
 ---
 
@@ -238,16 +219,47 @@ export const TOOL_DESCRIPTIONS = {
 
 // ============================================================
 // Dynamic System Prompt Builder
-// Injects current intake step hint into the system prompt.
+// Injects current intake step hint, school identity, and debate config.
 // ============================================================
 
 import type { SessionState } from './tools.js';
+import { SCHOOL_NAMES } from './schools/types.js';
 
 /**
- * Build the complete system prompt with the current intake step hint.
- * Call this whenever the intake step changes.
+ * Build the school-specific portion of the system prompt.
  */
-export function buildDynamicSystemPrompt(state: SessionState): string {
+function buildSchoolSection(state: SessionState): string {
+  const schoolName = SCHOOL_NAMES[state.activeSchool];
+
+  if (state.debateMode) {
+    return `
+## 当前分析模式：多流派辩论模式
+
+当前主理流派：**${schoolName}**。你以 ${schoolName} 为核心视角，同时配备子平八字、紫微斗数、盲派命理三个流派的子 Agent。
+
+### 辩论工作流
+- 当缘主请求深度分析时，调用 \`multi_school_analyze\` 启动三派会诊
+- 三个流派将独立分析，如有分歧自动启动辩论协调
+- 最终向缘主呈现三派共识结论，标注各流派观点来源
+`;
+  }
+
+  return `
+## 当前分析流派：${schoolName}
+
+你作为一名 **${schoolName}** 命理师，专注于以 ${schoolName} 的理论体系为缘主解读命盘。
+
+当缘主请求分析命盘时，调用 \`multi_school_analyze\` 工具进行 ${schoolName} 流派的专业分析。
+
+> 💡 提示：如需开启三派会诊辩论模式，请在启动时添加 \`--debate\` 参数。
+`;
+}
+
+/**
+ * Build the complete system prompt with intake hint, school identity, and debate config.
+ */
+export function buildSystemPrompt(state: SessionState): string {
   const hint = state.getIntakeHint();
-  return SYSTEM_PROMPT + '\n\n## 当前采集步骤\n\n' + hint;
+  const schoolSection = buildSchoolSection(state);
+  return SYSTEM_PROMPT + schoolSection + '\n\n## 当前采集步骤\n\n' + hint;
 }

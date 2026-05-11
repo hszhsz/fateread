@@ -13,7 +13,8 @@ import { buildYunBookContext } from '../skills/yun-book.js';
 import type { Skill } from '../skills/loader.js';
 import { verifyPillars } from './verify-pillars.js';
 import { Orchestrator } from './schools/orchestrator.js';
-import type { SynthesizedReport, AnalysisDimension } from './schools/types.js';
+import type { SynthesizedReport, AnalysisDimension, SchoolId } from './schools/types.js';
+import { SCHOOL_NAMES } from './schools/types.js';
 import type { TokenTracker } from '../shared/llm-client.js';
 import { createLlmClient } from '../shared/llm-client.js';
 import {
@@ -30,138 +31,167 @@ import type { IntakeState, IntakeStep } from '../shared/intake-state.js';
 // Tool Definitions (OpenAI function calling format)
 // ============================================================
 
-export const TOOLS = [
-  // ---- 缘主画像采集 ----
-  {
-    type: 'function' as const,
-    function: {
-      name: 'update_profile',
-      description: '更新缘主画像信息。在对话中逐步收集到的信息通过此工具保存。支持增量更新——每次只需传入新获取的字段。当所有必要信息收集完毕后，设置 intake_complete=true。',
-      parameters: {
-        type: 'object',
-        properties: {
-          birth_year: { type: 'number', description: '出生年份（公历）' },
-          birth_month: { type: 'number', description: '出生月份（公历）' },
-          birth_day: { type: 'number', description: '出生日期（公历）' },
-          birth_hour: { type: 'number', description: '出生小时（24小时制）' },
-          birth_minute: { type: 'number', description: '出生分钟' },
-          gender: { type: 'string', enum: ['male', 'female'], description: '性别' },
-          birth_city: { type: 'string', description: '出生城市' },
-          father_birth_year: { type: 'number', description: '父亲出生年份' },
-          mother_birth_year: { type: 'number', description: '母亲出生年份' },
-          parent_notes: { type: 'string', description: '关于父母的补充说明' },
-          sibling_rank: { type: 'number', description: '排行第几' },
-          total_siblings: { type: 'number', description: '兄弟姐妹总数（含自己）' },
-          sibling_birth_years: { type: 'array', items: { type: 'number' }, description: '兄弟姐妹出生年份列表' },
-          is_twin: { type: 'boolean', description: '是否双胞胎' },
-          twin_birth_minute_diff: { type: 'number', description: '双胞胎出生时间差（分钟）' },
-          sibling_notes: { type: 'string', description: '关于兄弟姐妹的补充说明' },
-          life_events: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                year: { type: 'number', description: '事件年份' },
-                category: { type: 'string', enum: ['career', 'education', 'marriage', 'health', 'wealth', 'family', 'other'] },
-                description: { type: 'string', description: '事件描述' },
-                is_positive: { type: 'boolean', description: '是否为正面事件' },
+/**
+ * Build the dynamic tool list based on debate mode and active school.
+ */
+export function getTools(debateMode: boolean, schoolName: string) {
+  const analyzeTool = debateMode
+    ? {
+        type: 'function' as const,
+        function: {
+          name: 'multi_school_analyze',
+          description: '三派会诊综合分析：同时调用子平八字、紫微斗数、盲派命理三个流派对命盘进行分析，如三派结论有分歧将自动启动辩论协调。必须先排盘。',
+          parameters: {
+            type: 'object',
+            properties: {
+              dimensions: {
+                type: 'array',
+                items: { type: 'string', enum: ['personality', 'career', 'wealth', 'marriage', 'health', 'education', 'interpersonal', 'timing', 'overall'] },
+                description: '分析维度列表',
               },
-              required: ['year', 'category', 'description'],
             },
-            description: '重大人生事件列表',
-          },
-          concerns: { type: 'array', items: { type: 'string' }, description: '缘主最关心的领域' },
-          specific_question: { type: 'string', description: '缘主具体想问的问题' },
-          intake_complete: { type: 'boolean', description: '信息采集是否完成' },
-          decline_step: { type: 'boolean', description: '缘主是否表示不想继续当前步骤，设为 true 跳过当前步骤' },
-        },
-        required: [],
-      },
-    },
-  },
-  {
-    type: 'function' as const,
-    function: {
-      name: 'get_profile',
-      description: '获取当前已采集的缘主画像信息，查看采集进度。',
-      parameters: { type: 'object', properties: {}, required: [] },
-    },
-  },
-  // ---- 排盘 ----
-  {
-    type: 'function' as const,
-    function: {
-      name: 'paipan',
-      description: '八字排盘：根据缘主画像中的出生信息，计算完整的四柱八字命盘。调用前应确保已收集完整出生信息。',
-      parameters: {
-        type: 'object',
-        properties: {
-          year: { type: 'number', description: '出生年份（公历）' },
-          month: { type: 'number', description: '出生月份（公历），1-12' },
-          day: { type: 'number', description: '出生日期（公历），1-31' },
-          hour: { type: 'number', description: '出生小时（24小时制），0-23' },
-          minute: { type: 'number', description: '出生分钟，默认0' },
-          gender: { type: 'string', enum: ['male', 'female'], description: '性别' },
-          city: { type: 'string', description: '出生城市名（中文），用于真太阳时校正' },
-          longitude: { type: 'number', description: '出生地经度（可选）' },
-        },
-        required: ['year', 'month', 'day', 'hour', 'gender'],
-      },
-    },
-  },
-  {
-    type: 'function' as const,
-    function: { name: 'analyze_liunian', description: '分析特定年份的流年运势', parameters: { type: 'object', properties: { year: { type: 'number' } }, required: ['year'] } },
-  },
-  {
-    type: 'function' as const,
-    function: { name: 'analyze_liunian_range', description: '分析一段时间范围的流年运势', parameters: { type: 'object', properties: { start_year: { type: 'number' }, end_year: { type: 'number' } }, required: ['start_year', 'end_year'] } },
-  },
-  // ---- 多流派 ----
-  {
-    type: 'function' as const,
-    function: {
-      name: 'multi_school_analyze',
-      description: '多流派综合分析：子平八字+紫微斗数+盲派命理三派会诊。必须先排盘。',
-      parameters: {
-        type: 'object',
-        properties: {
-          dimensions: {
-            type: 'array',
-            items: { type: 'string', enum: ['personality', 'career', 'wealth', 'marriage', 'health', 'education', 'interpersonal', 'timing', 'overall'] },
-            description: '分析维度列表',
+            required: [],
           },
         },
-        required: [],
-      },
-    },
-  },
-  // ---- Skill 系统 ----
-  {
-    type: 'function' as const,
-    function: { name: 'read_skill', description: '加载专业技能说明', parameters: { type: 'object', properties: { skill_name: { type: 'string' } }, required: ['skill_name'] } },
-  },
-  {
-    type: 'function' as const,
-    function: {
-      name: 'get_chart_context',
-      description: '获取当前命盘的结构化上下文数据（用于撰写命之书/运之书）',
-      parameters: {
-        type: 'object',
-        properties: {
-          type: { type: 'string', enum: ['ming', 'yun'], description: '上下文类型' },
-          start_year: { type: 'number' },
-          end_year: { type: 'number' },
+      }
+    : {
+        type: 'function' as const,
+        function: {
+          name: 'multi_school_analyze',
+          description: `使用${schoolName}流派对命盘进行分析。当前仅运行${schoolName}单一流派，不启动多派辩论。必须先排盘。`,
+          parameters: {
+            type: 'object',
+            properties: {
+              dimensions: {
+                type: 'array',
+                items: { type: 'string', enum: ['personality', 'career', 'wealth', 'marriage', 'health', 'education', 'interpersonal', 'timing', 'overall'] },
+                description: '分析维度列表',
+              },
+            },
+            required: [],
+          },
         },
-        required: ['type'],
+      };
+
+  return [
+    // ---- 缘主画像采集 ----
+    {
+      type: 'function' as const,
+      function: {
+        name: 'update_profile',
+        description: '更新缘主画像信息。在对话中逐步收集到的信息通过此工具保存。支持增量更新——每次只需传入新获取的字段。当所有必要信息收集完毕后，设置 intake_complete=true。',
+        parameters: {
+          type: 'object',
+          properties: {
+            birth_year: { type: 'number', description: '出生年份（公历）' },
+            birth_month: { type: 'number', description: '出生月份（公历）' },
+            birth_day: { type: 'number', description: '出生日期（公历）' },
+            birth_hour: { type: 'number', description: '出生小时（24小时制）' },
+            birth_minute: { type: 'number', description: '出生分钟' },
+            gender: { type: 'string', enum: ['male', 'female'], description: '性别' },
+            birth_city: { type: 'string', description: '出生城市' },
+            father_birth_year: { type: 'number', description: '父亲出生年份' },
+            mother_birth_year: { type: 'number', description: '母亲出生年份' },
+            parent_notes: { type: 'string', description: '关于父母的补充说明' },
+            sibling_rank: { type: 'number', description: '排行第几' },
+            total_siblings: { type: 'number', description: '兄弟姐妹总数（含自己）' },
+            sibling_birth_years: { type: 'array', items: { type: 'number' }, description: '兄弟姐妹出生年份列表' },
+            is_twin: { type: 'boolean', description: '是否双胞胎' },
+            twin_birth_minute_diff: { type: 'number', description: '双胞胎出生时间差（分钟）' },
+            sibling_notes: { type: 'string', description: '关于兄弟姐妹的补充说明' },
+            life_events: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  year: { type: 'number', description: '事件年份' },
+                  category: { type: 'string', enum: ['career', 'education', 'marriage', 'health', 'wealth', 'family', 'other'] },
+                  description: { type: 'string', description: '事件描述' },
+                  is_positive: { type: 'boolean', description: '是否为正面事件' },
+                },
+                required: ['year', 'category', 'description'],
+              },
+              description: '重大人生事件列表',
+            },
+            concerns: { type: 'array', items: { type: 'string' }, description: '缘主最关心的领域' },
+            specific_question: { type: 'string', description: '缘主具体想问的问题' },
+            intake_complete: { type: 'boolean', description: '信息采集是否完成' },
+            decline_step: { type: 'boolean', description: '缘主是否表示不想继续当前步骤，设为 true 跳过当前步骤' },
+          },
+          required: [],
+        },
       },
     },
-  },
-  {
-    type: 'function' as const,
-    function: { name: 'save_document', description: '将生成的 Markdown 文档保存为本地文件', parameters: { type: 'object', properties: { content: { type: 'string' }, filename: { type: 'string' } }, required: ['content', 'filename'] } },
-  },
-];
+    {
+      type: 'function' as const,
+      function: {
+        name: 'get_profile',
+        description: '获取当前已采集的缘主画像信息，查看采集进度。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    // ---- 排盘 ----
+    {
+      type: 'function' as const,
+      function: {
+        name: 'paipan',
+        description: '八字排盘：根据缘主画像中的出生信息，计算完整的四柱八字命盘。调用前应确保已收集完整出生信息。',
+        parameters: {
+          type: 'object',
+          properties: {
+            year: { type: 'number', description: '出生年份（公历）' },
+            month: { type: 'number', description: '出生月份（公历），1-12' },
+            day: { type: 'number', description: '出生日期（公历），1-31' },
+            hour: { type: 'number', description: '出生小时（24小时制），0-23' },
+            minute: { type: 'number', description: '出生分钟，默认0' },
+            gender: { type: 'string', enum: ['male', 'female'], description: '性别' },
+            city: { type: 'string', description: '出生城市名（中文），用于真太阳时校正' },
+            longitude: { type: 'number', description: '出生地经度（可选）' },
+          },
+          required: ['year', 'month', 'day', 'hour', 'gender'],
+        },
+      },
+    },
+    {
+      type: 'function' as const,
+      function: { name: 'analyze_liunian', description: '分析特定年份的流年运势', parameters: { type: 'object', properties: { year: { type: 'number' } }, required: ['year'] } },
+    },
+    {
+      type: 'function' as const,
+      function: { name: 'analyze_liunian_range', description: '分析一段时间范围的流年运势', parameters: { type: 'object', properties: { start_year: { type: 'number' }, end_year: { type: 'number' } }, required: ['start_year', 'end_year'] } },
+    },
+    // ---- 命盘分析 ----
+    analyzeTool,
+    // ---- Skill 系统 ----
+    {
+      type: 'function' as const,
+      function: { name: 'read_skill', description: '加载专业技能说明', parameters: { type: 'object', properties: { skill_name: { type: 'string' } }, required: ['skill_name'] } },
+    },
+    {
+      type: 'function' as const,
+      function: {
+        name: 'get_chart_context',
+        description: '获取当前命盘的结构化上下文数据（用于撰写命之书/运之书）',
+        parameters: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['ming', 'yun'], description: '上下文类型' },
+            start_year: { type: 'number' },
+            end_year: { type: 'number' },
+          },
+          required: ['type'],
+        },
+      },
+    },
+    {
+      type: 'function' as const,
+      function: { name: 'save_document', description: '将生成的 Markdown 文档保存为本地文件', parameters: { type: 'object', properties: { content: { type: 'string' }, filename: { type: 'string' } }, required: ['content', 'filename'] } },
+    },
+  ];
+}
+
+// Keep the original static TOOLS for backward compatibility
+export const TOOLS = getTools(false, '子平八字');
 
 // ============================================================
 // SessionState — per-session, no globals
@@ -176,11 +206,15 @@ export class SessionState {
   lastReport: SynthesizedReport | null = null;
   outputDir: string;
   tokenTracker: TokenTracker | undefined;
+  activeSchool: SchoolId;
+  debateMode: boolean;
 
-  constructor(tokenTracker?: TokenTracker) {
+  constructor(tokenTracker?: TokenTracker, activeSchool: SchoolId = 'ziping', debateMode = false) {
     this.outputDir = getDefaultOutputDir();
     this.tokenTracker = tokenTracker;
     this.intake = createIntakeState();
+    this.activeSchool = activeSchool;
+    this.debateMode = debateMode;
   }
 
   loadSkills(skillsDir?: string): void {
@@ -278,8 +312,13 @@ export function compressToolResult(name: string, resultStr: string): string {
         break;
       case 'multi_school_analyze':
         if (result.meta) {
+          const debatedDims = result.meta.debatedDimensions as string[];
+          const isDebate = debatedDims && debatedDims.length > 0;
+          const summary = isDebate
+            ? `三派会诊完成 | 一致率: ${result.meta.agreementRate}% | 辩论维度: ${debatedDims.join(', ')}`
+            : `单流派分析完成 | ${result.meta.agreementRate}%`;
           return JSON.stringify({
-            summary: `三派会诊完成 | 一致率: ${result.meta.agreementRate}% | 辩论维度: ${result.meta.debatedDimensions?.join(', ') || '无'}`,
+            summary,
             meta: result.meta,
             formatted: result.formatted?.slice(0, 500) + '...(完整报告见后续展示)',
           });
@@ -632,14 +671,23 @@ async function executeMultiSchoolAnalyze(args: Record<string, unknown>, state: S
 
   try {
     const orch = state.getOrchestrator();
-    const report = await orch.analyze(state.chart, state.profile, dimensions);
-    state.lastReport = report;
 
-    const formatted = orch.formatReport(report);
-    return JSON.stringify({ formatted, meta: report.meta, finalAnalysis: report.finalAnalysis }, null, 2);
+    if (state.debateMode) {
+      // Multi-school with debate
+      const report = await orch.analyze(state.chart, state.profile, dimensions);
+      state.lastReport = report;
+      const formatted = orch.formatReport(report);
+      return JSON.stringify({ formatted, meta: report.meta, finalAnalysis: report.finalAnalysis }, null, 2);
+    } else {
+      // Single school only, no debate
+      const report = await orch.analyzeSingle(state.activeSchool, state.chart, state.profile, dimensions);
+      state.lastReport = report;
+      const formatted = orch.formatSingleSchoolReport(report);
+      return JSON.stringify({ formatted, meta: report.meta, finalAnalysis: report.finalAnalysis }, null, 2);
+    }
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    return JSON.stringify({ error: `多流派分析失败: ${msg}` });
+    return JSON.stringify({ error: `流派分析失败: ${msg}` });
   }
 }
 

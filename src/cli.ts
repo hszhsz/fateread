@@ -20,6 +20,8 @@ import { paipan, formatChart } from './core/index.js';
 import type { PaipanInput } from './core/types.js';
 import { CITY_LONGITUDE } from './core/solar-time.js';
 import { listSessions, deleteSession } from './shared/session-store.js';
+import type { SchoolId } from './agent/schools/types.js';
+import { SCHOOL_NAMES } from './agent/schools/types.js';
 
 const BANNER = `
 ╔══════════════════════════════════════════════════════╗
@@ -55,6 +57,13 @@ const HELP = `
   /stream        切换流式输出模式（默认开启）
   /quit          退出程序
 
+启动参数：
+  --school <流派>  选择命理流派: ziping(子平八字,默认) / ziwei(紫微斗数) / mangpai(盲派命理)
+  --debate         启用多流派辩论模式（默认关闭，仅单流派执行）
+  --offline, -o    离线排盘模式（无 AI 解读）
+  --resume <id>    恢复保存的会话
+  --no-stream      禁用流式输出
+
 使用方式：
   直接输入出生信息即可开始，例如：
   > 帮我看看命，1990年3月15日14:30出生，男，北京
@@ -73,6 +82,22 @@ async function main() {
 
   // --stream / --no-stream flags
   const useStream = !args.includes('--no-stream');
+
+  // --debate flag
+  const debateMode = args.includes('--debate');
+
+  // --school flag
+  const schoolIdx = args.indexOf('--school');
+  let school: SchoolId = 'ziping';
+  if (schoolIdx !== -1 && schoolIdx + 1 < args.length) {
+    const schoolArg = args[schoolIdx + 1].toLowerCase();
+    if (schoolArg === 'ziping' || schoolArg === 'ziwei' || schoolArg === 'mangpai') {
+      school = schoolArg;
+    } else {
+      console.log(`⚠️  未知流派: ${schoolArg}，使用默认流派 子平八字`);
+      console.log(`   可用流派: ziping(子平八字), ziwei(紫微斗数), mangpai(盲派命理)\n`);
+    }
+  }
 
   // --resume flag
   const resumeIdx = args.indexOf('--resume');
@@ -94,13 +119,17 @@ async function main() {
   }
 
   console.log(BANNER);
-  console.log('✨ AI 模式已启用，输入出生信息开始解读命盘');
-  console.log('   输入 /help 查看帮助\n');
+  const schoolName = SCHOOL_NAMES[school];
+  const modeLabel = debateMode ? `多流派辩论模式` : `${schoolName}`;
+  console.log(`✨ AI 模式已启用 | 流派: ${modeLabel}`);
+  console.log(`   输入 /help 查看帮助\n`);
 
   const agent = new FateReadAgent({
     apiKey,
     baseUrl: process.env.OPENAI_BASE_URL,
     model: process.env.FATEREAD_MODEL,
+    school,
+    debate: debateMode,
   });
 
   // Resume session if requested

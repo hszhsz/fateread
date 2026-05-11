@@ -5,13 +5,14 @@
 // ============================================================
 
 import OpenAI from 'openai';
-import { SYSTEM_PROMPT, buildDynamicSystemPrompt } from './prompt.js';
+import { buildSystemPrompt } from './prompt.js';
 import {
-  TOOLS,
+  getTools,
   executeTool,
   compressToolResult,
   SessionState,
 } from './tools.js';
+import type { SchoolId } from './schools/types.js';
 import { buildSkillCatalog } from '../skills/loader.js';
 import {
   createLlmClient,
@@ -44,6 +45,10 @@ export interface AgentOptions {
   maxIterations?: number;
   /** Enable token tracking */
   trackTokens?: boolean;
+  /** Active school (default: 'ziping' 子平八字) */
+  school?: SchoolId;
+  /** Enable multi-school debate mode (default: false, single agent only) */
+  debate?: boolean;
 }
 
 export interface Message {
@@ -159,6 +164,8 @@ export class FateReadAgent {
   private tokenTracker: TokenTracker | undefined;
   private maxIterations: number;
   private sessionId: string;
+  private school: SchoolId;
+  private debate: boolean;
 
   constructor(options: AgentOptions = {}) {
     this.client = createLlmClient({
@@ -168,18 +175,20 @@ export class FateReadAgent {
     this.model = resolveModel({ model: options.model });
     this.maxTokens = resolveMaxTokens({ maxTokens: options.maxTokens });
     this.maxIterations = options.maxIterations || 10;
+    this.school = options.school || 'ziping';
+    this.debate = options.debate || false;
 
     if (options.trackTokens !== false) {
       this.tokenTracker = createTokenTracker();
     }
 
-    this.state = new SessionState(this.tokenTracker);
+    this.state = new SessionState(this.tokenTracker, this.school, this.debate);
     this.state.loadSkills(options.skillsDir);
 
     const skillCatalog = buildSkillCatalog(this.state.skills);
 
-    // Build system prompt with dynamic intake hint
-    const systemPrompt = SYSTEM_PROMPT + '\n\n' + this.state.getIntakeHint() + '\n\n' + skillCatalog;
+    // Build system prompt with school/debate context
+    const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
 
     this.messages.push({ role: 'system', content: systemPrompt });
     this.sessionId = generateSessionId();
@@ -376,10 +385,10 @@ export class FateReadAgent {
    * Reset the conversation.
    */
   reset(): void {
-    this.state = new SessionState(this.tokenTracker);
+    this.state = new SessionState(this.tokenTracker, this.school, this.debate);
     this.state.loadSkills();
     const skillCatalog = buildSkillCatalog(this.state.skills);
-    const systemPrompt = SYSTEM_PROMPT + '\n\n' + this.state.getIntakeHint() + '\n\n' + skillCatalog;
+    const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
     this.messages = [{ role: 'system', content: systemPrompt }];
     this.sessionId = generateSessionId();
   }
@@ -412,7 +421,7 @@ export class FateReadAgent {
 
     // Rebuild system prompt
     const skillCatalog = buildSkillCatalog(this.state.skills);
-    const systemPrompt = SYSTEM_PROMPT + '\n\n' + this.state.getIntakeHint() + '\n\n' + skillCatalog;
+    const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
     this.messages[0] = { role: 'system', content: systemPrompt };
 
     return true;
@@ -448,7 +457,7 @@ export class FateReadAgent {
    */
   private updateSystemPromptIntake(): void {
     const skillCatalog = buildSkillCatalog(this.state.skills);
-    const systemPrompt = buildDynamicSystemPrompt(this.state);
+    const systemPrompt = buildSystemPrompt(this.state);
     if (this.messages.length > 0 && this.messages[0].role === 'system') {
       this.messages[0] = {
         role: 'system',
@@ -474,10 +483,11 @@ export class FateReadAgent {
       return m;
     });
 
+    const tools = getTools(this.debate, this.state.activeSchool);
     const response = await this.client.chat.completions.create({
       model: this.model,
       messages: requestMessages as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-      tools: TOOLS,
+      tools,
       tool_choice: 'auto',
       max_tokens: this.maxTokens,
     });
@@ -518,10 +528,11 @@ export class FateReadAgent {
       return m;
     });
 
+    const tools = getTools(this.debate, this.state.activeSchool);
     const stream = await this.client.chat.completions.create({
       model: this.model,
       messages: requestMessages as unknown as OpenAI.Chat.Completions.ChatCompletionMessageParam[],
-      tools: TOOLS,
+      tools,
       tool_choice: 'auto',
       max_tokens: this.maxTokens,
       stream: true,
