@@ -1,0 +1,72 @@
+[
+  {
+    "id": "mangpai_001",
+    "source": "经典验证 — 盲派做功论",
+    "description": "乾造：戊申 壬戌 壬戌 庚子。1968年10月18日夜子时，戌月金水相生。申戌拱酉，金旺水相。",
+    "input": { "year": 1968, "month": 10, "day": 18, "hour": 23, "minute": 45, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "戊申", "monthPillar": "壬戌", "dayPillar": "壬戌", "hourPillar": "庚子" }
+  },
+  {
+    "id": "mangpai_002",
+    "source": "经典验证 — 盲派宾主论",
+    "description": "坤造：甲寅 丁卯 壬戌 乙巳。1974年3月22日巳时，卯月木旺。寅卯半会木局。",
+    "input": { "year": 1974, "month": 3, "day": 22, "hour": 9, "minute": 30, "gender": "female", "longitude": 120 },
+    "expected": { "yearPillar": "甲寅", "monthPillar": "丁卯", "dayPillar": "壬戌", "hourPillar": "乙巳" }
+  },
+  {
+    "id": "mangpai_003",
+    "source": "经典验证 — 盲派制杀做功",
+    "description": "乾造：丙午 庚寅 庚戌 己卯。1966年2月20日卯时，寅月火土旺。寅午半合火局制金。",
+    "input": { "year": 1966, "month": 2, "day": 20, "hour": 6, "minute": 0, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "丙午", "monthPillar": "庚寅", "dayPillar": "庚戌", "hourPillar": "己卯" }
+  },
+  {
+    "id": "mangpai_004",
+    "source": "经典验证 — 盲派食神泄秀",
+    "description": "坤造：丁卯 壬子 己未 丙寅。1988年1月5日寅时，子月水旺。子卯刑，印星做功。",
+    "input": { "year": 1988, "month": 1, "day": 5, "hour": 3, "minute": 30, "gender": "female", "longitude": 120 },
+    "expected": { "yearPillar": "丁卯", "monthPillar": "壬子", "dayPillar": "己未", "hourPillar": "丙寅" }
+  },
+  {
+    "id": "mangpai_005",
+    "source": "经典验证 — 盲派功神配置",
+    "description": "乾造：壬寅 庚戌 己丑 甲子。1962年10月17日夜子时，戌月。寅戌拱午，火土功神。",
+    "input": { "year": 1962, "month": 10, "day": 17, "hour": 23, "minute": 30, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "壬寅", "monthPillar": "庚戌", "dayPillar": "己丑", "hourPillar": "甲子" }
+  },
+  {
+    "id": "mangpai_006_daxue",
+    "source": "边界测试 — 大雪后",
+    "description": "2020-12-07 08:00 BJ。大雪在当日 01:12，此时在大雪后→子月。验证交节月柱切换。",
+    "input": { "year": 2020, "month": 12, "day": 7, "hour": 8, "minute": 0, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "庚子", "monthPillar": "戊子", "dayPillar": "甲申", "hourPillar": "戊辰" }
+  },
+  {
+    "id": "mangpai_007_xiaohan",
+    "source": "边界测试 — 小寒前",
+    "description": "2021-01-05 12:00 BJ。小寒在当日 11:23，此时在小寒后→丑月。验证跨年月柱。",
+    "input": { "year": 2021, "month": 1, "day": 5, "hour": 12, "minute": 0, "gender": "female", "longitude": 120 },
+    "expected": { "yearPillar": "庚子", "monthPillar": "己丑", "dayPillar": "癸丑", "hourPillar": "戊午" }
+  },
+  {
+    "id": "mangpai_008_dayun_ni",
+    "source": "功能测试 — 大运逆排",
+    "description": "阴男（乙卯年），大运应逆排。1975-08-10 06:00 BJ。",
+    "input": { "year": 1975, "month": 8, "day": 10, "hour": 6, "minute": 0, "gender": "male", "longitude": 116.4 },
+    "expected": { "yearPillar": "乙卯", "monthPillar": "甲申", "dayPillar": "戊子", "hourPillar": "乙卯" }
+  },
+  {
+    "id": "mangpai_009_liunian",
+    "source": "功能测试 — 流年推算",
+    "description": "验证特定年份流年干支推算。庚辰 辛巳 庚寅 壬午。",
+    "input": { "year": 2000, "month": 6, "day": 1, "hour": 12, "minute": 0, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "庚辰", "monthPillar": "辛巳", "dayPillar": "庚寅", "hourPillar": "壬午" }
+  },
+  {
+    "id": "mangpai_010_cross_gender",
+    "source": "功能测试 — 同八字异性别",
+    "description": "与 mangpai_001 同日同时但为坤造。四柱相同但大运顺逆应因性别而异。",
+    "input": { "year": 1968, "month": 10, "day": 18, "hour": 23, "minute": 45, "gender": "female", "longitude": 120 },
+    "expected": { "yearPillar": "戊申", "monthPillar": "壬戌", "dayPillar": "壬戌", "hourPillar": "庚子" }
+  }
+]

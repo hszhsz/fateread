@@ -1,0 +1,77 @@
+[
+  {
+    "id": "ziping_001",
+    "source": "经典验证 — 《滴天髓阐微·通神论》",
+    "description": "乾造：甲申 丙寅 甲辰 甲子。任铁樵注典型命例。甲木春生，比劫林立。",
+    "note": "《滴天髓》仅给出四柱(甲申 丙寅 甲辰 甲子)，公历日期为引擎推算的可对应日期。",
+    "input": { "year": 1884, "month": 2, "day": 23, "hour": 23, "minute": 30, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "甲申", "monthPillar": "丙寅", "dayPillar": "甲辰", "hourPillar": "甲子" }
+  },
+  {
+    "id": "ziping_002",
+    "source": "经典验证 — 《子平真诠》论用神章",
+    "description": "乾造：戊戌 甲寅 癸卯 丙辰。春土气虚，七杀当令。",
+    "note": "《子平真诠》仅给出四柱，公历日期为引擎推算的可对应日期。",
+    "input": { "year": 1898, "month": 2, "day": 9, "hour": 7, "minute": 30, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "戊戌", "monthPillar": "甲寅", "dayPillar": "癸卯", "hourPillar": "丙辰" }
+  },
+  {
+    "id": "ziping_003",
+    "source": "经典验证 — 《三命通会》卷六",
+    "description": "乾造：壬辰 壬子 甲午 乙丑。金寒水冷，伤官配印。",
+    "note": "《三命通会》仅给出四柱，公历日期为引擎推算的可对应日期。",
+    "input": { "year": 1892, "month": 12, "day": 28, "hour": 1, "minute": 30, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "壬辰", "monthPillar": "壬子", "dayPillar": "甲午", "hourPillar": "乙丑" }
+  },
+  {
+    "id": "ziping_004",
+    "source": "经典验证 — 《滴天髓阐微·六亲论》",
+    "description": "坤造：己巳 己巳 壬子 庚子。双巳伏吟。",
+    "note": "《滴天髓阐微》仅给出四柱，公历日期为引擎推算的可对应日期。",
+    "input": { "year": 1869, "month": 5, "day": 20, "hour": 23, "minute": 15, "gender": "female", "longitude": 120 },
+    "expected": { "yearPillar": "己巳", "monthPillar": "己巳", "dayPillar": "壬子", "hourPillar": "庚子" }
+  },
+  {
+    "id": "ziping_005",
+    "source": "经典验证 — 《穷通宝鉴》甲木章",
+    "description": "乾造：庚申 戊寅 辛卯 戊子。甲木用庚，劈甲引丁。",
+    "note": "《穷通宝鉴》仅给出四柱，公历日期为引擎推算的可对应日期。",
+    "input": { "year": 1860, "month": 2, "day": 16, "hour": 23, "minute": 45, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "庚申", "monthPillar": "戊寅", "dayPillar": "辛卯", "hourPillar": "戊子" }
+  },
+  {
+    "id": "ziping_006_lichun",
+    "source": "边界测试 — 立春前",
+    "description": "2020-02-04 10:00 BJ。立春在当日 17:03，此时在立春前，应属己亥年丁丑月。",
+    "input": { "year": 2020, "month": 2, "day": 4, "hour": 10, "minute": 0, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "己亥", "monthPillar": "丁丑", "dayPillar": "丁丑", "hourPillar": "乙巳" }
+  },
+  {
+    "id": "ziping_007_zishi",
+    "source": "边界测试 — 子时日柱",
+    "description": "23:30 生人，日柱应算次日。验证 23 点后日柱切换。",
+    "input": { "year": 2020, "month": 6, "day": 15, "hour": 23, "minute": 30, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "庚子", "monthPillar": "壬午", "dayPillar": "庚寅", "hourPillar": "丙子" }
+  },
+  {
+    "id": "ziping_008_jingzhe",
+    "source": "边界测试 — 惊蛰前",
+    "description": "2020-03-05 10:00 BJ。惊蛰在当日 10:57，此时在惊蛰前→寅月。验证交节月柱切换。",
+    "input": { "year": 2020, "month": 3, "day": 5, "hour": 10, "minute": 0, "gender": "female", "longitude": 120 },
+    "expected": { "yearPillar": "庚子", "monthPillar": "戊寅", "dayPillar": "丁未", "hourPillar": "乙巳" }
+  },
+  {
+    "id": "ziping_009_true_solar",
+    "source": "边界测试 — 真太阳时",
+    "description": "乌鲁木齐（87°E）20:00 平太阳时 ≈ 17:44 真太阳时（酉时）。验证时柱校正。",
+    "input": { "year": 2020, "month": 1, "day": 1, "hour": 20, "minute": 0, "gender": "male", "longitude": 87 },
+    "expected": { "yearPillar": "己亥", "monthPillar": "丙子", "dayPillar": "癸卯", "hourPillar": "辛酉" }
+  },
+  {
+    "id": "ziping_010_dayun_shun",
+    "source": "功能测试 — 大运顺排",
+    "description": "阳男（庚午年），大运应顺排。1990-05-15 08:00 BJ。",
+    "input": { "year": 1990, "month": 5, "day": 15, "hour": 8, "minute": 0, "gender": "male", "longitude": 116.4 },
+    "expected": { "yearPillar": "庚午", "monthPillar": "辛巳", "dayPillar": "庚辰", "hourPillar": "庚辰" }
+  }
+]

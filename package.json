@@ -12,6 +12,10 @@
     "start": "node dist/cli.js",
     "dev": "tsx src/cli.ts",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "benchmark": "node --experimental-vm-modules node_modules/.bin/jest --config jest.config.json --verbose",
+    "benchmark:ziping": "node --experimental-vm-modules node_modules/.bin/jest --config jest.config.json --verbose -t '子平八字'",
+    "benchmark:ziwei": "node --experimental-vm-modules node_modules/.bin/jest --config jest.config.json --verbose -t '紫微斗数'",
+    "benchmark:mangpai": "node --experimental-vm-modules node_modules/.bin/jest --config jest.config.json --verbose -t '盲派命理'",
     "lint": "eslint src/"
   },
   "keywords": [

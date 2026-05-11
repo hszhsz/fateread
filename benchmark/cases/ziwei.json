@@ -1,0 +1,58 @@
+[
+  {
+    "id": "ziwei_001",
+    "source": "经典验证 — 《紫微斗数全书》卷一",
+    "description": "辛未 辛丑 庚戌 丙子。1992年2月4日子时（正月初一），立春前生人。验证紫微安星基础。",
+    "input": { "year": 1992, "month": 2, "day": 4, "hour": 0, "minute": 30, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "辛未", "monthPillar": "辛丑", "dayPillar": "庚戌", "hourPillar": "丙子" }
+  },
+  {
+    "id": "ziwei_002",
+    "source": "经典验证 — 《紫微斗数全书》卷二",
+    "description": "甲子 壬申 辛巳 乙未。1984年8月15日未时，申月金旺。验证武曲天府星系。",
+    "input": { "year": 1984, "month": 8, "day": 15, "hour": 14, "minute": 0, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "甲子", "monthPillar": "壬申", "dayPillar": "辛巳", "hourPillar": "乙未" }
+  },
+  {
+    "id": "ziwei_003",
+    "source": "经典验证 — 《紫微斗数全书》卷三",
+    "description": "丙辰 辛卯 辛未 辛卯。1976年3月20日卯时，春分前卯月。验证廉贞贪狼星系。",
+    "input": { "year": 1976, "month": 3, "day": 20, "hour": 6, "minute": 0, "gender": "female", "longitude": 120 },
+    "expected": { "yearPillar": "丙辰", "monthPillar": "辛卯", "dayPillar": "辛未", "hourPillar": "辛卯" }
+  },
+  {
+    "id": "ziwei_004",
+    "source": "经典验证 — 《太微赋》注",
+    "description": "戊辰 癸亥 丁卯 壬寅。1988年11月8日寅时，立冬后亥月。验证七杀朝斗格。",
+    "input": { "year": 1988, "month": 11, "day": 8, "hour": 4, "minute": 15, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "戊辰", "monthPillar": "癸亥", "dayPillar": "丁卯", "hourPillar": "壬寅" }
+  },
+  {
+    "id": "ziwei_005",
+    "source": "经典验证 — 《骨髓赋》注",
+    "description": "庚申 壬午 乙亥 丁亥。1980年7月1日亥时，午月火旺。验证水澄桂萼格。",
+    "input": { "year": 1980, "month": 7, "day": 1, "hour": 22, "minute": 0, "gender": "female", "longitude": 120 },
+    "expected": { "yearPillar": "庚申", "monthPillar": "壬午", "dayPillar": "乙亥", "hourPillar": "丁亥" }
+  },
+  {
+    "id": "ziwei_006_lixia",
+    "source": "边界测试 — 立夏交节",
+    "description": "2020年立夏(5月5日 08:51 BJ)后巳月。验证月柱在立夏节气切换。",
+    "input": { "year": 2020, "month": 5, "day": 5, "hour": 9, "minute": 0, "gender": "male", "longitude": 120 },
+    "expected": { "yearPillar": "庚子", "monthPillar": "辛巳", "dayPillar": "戊申", "hourPillar": "丁巳" }
+  },
+  {
+    "id": "ziwei_007_lidong",
+    "source": "边界测试 — 立冬交节",
+    "description": "2020年立冬(11月7日 14:17 BJ)后亥月。验证月柱在立冬节气切换。",
+    "input": { "year": 2020, "month": 11, "day": 7, "hour": 15, "minute": 0, "gender": "female", "longitude": 120 },
+    "expected": { "yearPillar": "庚子", "monthPillar": "丁亥", "dayPillar": "甲寅", "hourPillar": "壬申" }
+  },
+  {
+    "id": "ziwei_008_true_solar",
+    "source": "边界测试 — 真太阳时",
+    "description": "喀什(76°E) 12:00平太阳时≈9:01真太阳时(巳时)。验证紫微斗数命宫安法基于真太阳时。",
+    "input": { "year": 1995, "month": 8, "day": 20, "hour": 12, "minute": 0, "gender": "male", "longitude": 76 },
+    "expected": { "yearPillar": "乙亥", "monthPillar": "甲申", "dayPillar": "癸未", "hourPillar": "丁巳" }
+  }
+]
