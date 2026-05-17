@@ -137,7 +137,11 @@ function displayStreamEvent(event: StreamEvent, thinkingShown: boolean): boolean
       if (event.data?.formatted) {
         process.stdout.write(`\n${event.data.formatted}\n`);
       } else if (event.data?.agreementRate !== undefined) {
-        process.stdout.write(chalk.yellow(`\n🎭 三派会诊完成 | 一致率: ${event.data.agreementRate}%\n`));
+        if (event.data.debateMode) {
+          process.stdout.write(chalk.yellow(`\n🎭 三派会诊完成 | 一致率: ${event.data.agreementRate}%\n`));
+        } else {
+          process.stdout.write(chalk.green(`\n✅ 单流派分析完成\n`));
+        }
       } else if (event.data?.progress) {
         const progress = event.data.progress as Record<string, unknown>;
         process.stdout.write(chalk.green(`\n📋 ${progress.completeness || '更新完成'}\n`));

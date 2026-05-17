@@ -615,6 +615,7 @@ export class FateReadAgent {
       }
       if (funcName === 'multi_school_analyze' && parsed.meta) {
         return {
+          debateMode: this.debate,
           agreementRate: parsed.meta.agreementRate,
           debatedDimensions: parsed.meta.debatedDimensions,
         };
