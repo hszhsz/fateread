@@ -348,9 +348,10 @@ export function solarToLunar(year: number, month: number, day: number): {
   lunarDayName: string;
 } {
   // 1900年1月31日是农历1900年正月初一
-  const baseDate = new Date(1900, 0, 31);
-  const targetDate = new Date(year, month - 1, day);
-  let offset = Math.floor((targetDate.getTime() - baseDate.getTime()) / (24 * 60 * 60 * 1000));
+  // 使用 Date.UTC 避免本地时区在不同年份的差异 (如1900年 GMT+0805 vs 1990年 GMT+0900) 导致的天数截断误差
+  const baseDate = Date.UTC(1900, 0, 31);
+  const targetDate = Date.UTC(year, month - 1, day);
+  let offset = Math.floor((targetDate - baseDate) / (24 * 60 * 60 * 1000));
 
   // 推算农历年
   let lunarYear = 1900;
