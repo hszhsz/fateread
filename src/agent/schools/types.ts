@@ -130,6 +130,8 @@ export interface SynthesizedReport {
 export interface SchoolAgent {
   id: SchoolId;
   name: string;
+  /** 进度回调，用于 TUI 实时显示分析过程 */
+  onProgress?: (message: string) => void;
 
   /**
    * 对命盘进行分析

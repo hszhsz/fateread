@@ -153,7 +153,8 @@ function displayStreamEvent(event: StreamEvent, thinkingShown: boolean): boolean
       process.stdout.write(event.content);
       break;
     case 'progress':
-      process.stdout.write(chalk.cyan(`\n${event.content}\n`));
+      // Real-time analysis progress — show immediately without extra newlines
+      process.stdout.write(chalk.cyan(`${event.content}\n`));
       break;
     case 'error':
       process.stdout.write(chalk.red(`\n❌ ${event.content}\n`));
@@ -495,9 +496,43 @@ async function handleChat(input: string, agent: FateReadAgent, streamMode: boole
 
     if (streamMode) {
       let thinkingShown = false;
+      let workingSpinner: NodeJS.Timeout | null = null;
+      let spinnerFrame = 0;
+      const spinnerChars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+      const startSpinner = () => {
+        if (workingSpinner) return;
+        workingSpinner = setInterval(() => {
+          const char = spinnerChars[spinnerFrame % spinnerChars.length];
+          process.stdout.write(`\r${chalk.yellow(char)} ${chalk.gray('正在分析中...')}`);
+          spinnerFrame++;
+        }, 100);
+      };
+
+      const stopSpinner = () => {
+        if (workingSpinner) {
+          clearInterval(workingSpinner);
+          workingSpinner = null;
+          process.stdout.write('\r\x1b[K'); // clear spinner line
+        }
+      };
+
+      // Start spinner before streaming begins
+      startSpinner();
+
       for await (const event of agent.chatStream(input)) {
+        // Stop spinner as soon as any real output arrives
+        if (event.type !== 'progress' || spinnerFrame > 0) {
+          stopSpinner();
+        }
         thinkingShown = displayStreamEvent(event, thinkingShown);
+        // Restart spinner if we're entering a long-running tool
+        if (event.type === 'tool_start' && event.content === 'multi_school_analyze') {
+          startSpinner();
+        }
       }
+
+      stopSpinner();
       process.stdout.write('\n');
     } else {
       process.stdout.write(chalk.gray('思考中...\n'));

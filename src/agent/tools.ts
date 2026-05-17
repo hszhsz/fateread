@@ -208,6 +208,8 @@ export class SessionState {
   tokenTracker: TokenTracker | undefined;
   activeSchool: SchoolId;
   debateMode: boolean;
+  /** 进度回调，用于 TUI 实时显示分析过程 */
+  onProgress?: (message: string) => void;
 
   constructor(tokenTracker?: TokenTracker, activeSchool: SchoolId = 'ziping', debateMode = false) {
     this.outputDir = getDefaultOutputDir();
@@ -227,7 +229,7 @@ export class SessionState {
 
   getOrchestrator(): Orchestrator {
     if (!this.orchestrator) {
-      this.orchestrator = new Orchestrator({ verbose: true });
+      this.orchestrator = new Orchestrator({ verbose: true, onProgress: this.onProgress });
     }
     return this.orchestrator;
   }

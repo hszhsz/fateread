@@ -28,6 +28,8 @@ export interface OrchestratorConfig {
   debate: Partial<DebateConfig>;
   agentOptions: SchoolAgentOptions;
   verbose: boolean;
+  /** 进度回调，用于 TUI 实时显示分析过程 */
+  onProgress?: (message: string) => void;
 }
 
 const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
@@ -59,16 +61,20 @@ export class Orchestrator {
     const ziwei = new ZiweiAgent();
     const mangpai = new MangpaiAgent();
 
-    // Inject shared client and token tracker into sub-agents
+    // Inject shared client, token tracker and progress callback into sub-agents
     for (const agent of [ziping, ziwei, mangpai]) {
       agent.sharedClient = this.sharedClient;
       agent.tokenTracker = this.tokenTracker;
+      agent.onProgress = this.config.onProgress;
     }
 
     this.agents = [ziping, ziwei, mangpai];
 
-    // Initialize debate with shared client
-    this.debate = new DebateProtocol(this.config.debate, this.sharedClient);
+    // Initialize debate with shared client and progress callback
+    this.debate = new DebateProtocol(
+      { ...this.config.debate, onProgress: this.config.onProgress },
+      this.sharedClient,
+    );
     this.debate.tokenTracker = this.tokenTracker;
   }
 
@@ -78,64 +84,56 @@ export class Orchestrator {
     dimensions: AnalysisDimension[] = ['personality', 'career', 'wealth', 'marriage', 'health', 'timing', 'overall'],
   ): Promise<SynthesizedReport> {
     const startTime = Date.now();
+    const progress = (msg: string) => {
+      if (this.config.onProgress) this.config.onProgress(msg);
+      if (this.config.verbose) console.log(msg);
+    };
 
-    if (this.config.verbose) {
-      console.log('\n' + '═'.repeat(60));
-      console.log('🎭 FateRead 多流派分析启动');
-      console.log('═'.repeat(60));
-      console.log(`📊 分析维度: ${dimensions.join(', ')}`);
-      console.log(`🏫 参与流派: ${this.agents.map(a => a.name).join('、')}`);
-      console.log('─'.repeat(60));
-    }
+    progress('\n' + '═'.repeat(60));
+    progress('🎭 FateRead 多流派分析启动');
+    progress('═'.repeat(60));
+    progress(`📊 分析维度: ${dimensions.join(', ')}`);
+    progress(`🏫 参与流派: ${this.agents.map(a => a.name).join('、')}`);
+    progress('─'.repeat(60));
 
     // Phase 1: Parallel dispatch to sub-agents
-    if (this.config.verbose) {
-      console.log('\n📡 Phase 1: 分发命盘给各流派子 Agent...');
-    }
+    progress('\n📡 Phase 1: 分发命盘给各流派子 Agent...');
 
     let reports: SchoolReport[];
     if (this.config.parallel) {
       reports = await Promise.all(
         this.agents.map(async (agent) => {
-          if (this.config.verbose) console.log(`  🔄 ${agent.name} 正在分析...`);
+          progress(`  🔄 ${agent.name} 正在分析...`);
           const report = await agent.analyze(chart, profile, dimensions, this.config.agentOptions);
-          if (this.config.verbose) {
-            console.log(`  ✅ ${agent.name} 分析完成（格局: ${report.patternSummary.slice(0, 30)}...）`);
-          }
+          progress(`  ✅ ${agent.name} 分析完成（格局: ${report.patternSummary.slice(0, 30)}...）`);
           return report;
         }),
       );
     } else {
       reports = [];
       for (const agent of this.agents) {
-        if (this.config.verbose) console.log(`  🔄 ${agent.name} 正在分析...`);
+        progress(`  🔄 ${agent.name} 正在分析...`);
         const report = await agent.analyze(chart, profile, dimensions, this.config.agentOptions);
-        if (this.config.verbose) console.log(`  ✅ ${agent.name} 分析完成`);
+        progress(`  ✅ ${agent.name} 分析完成（格局: ${report.patternSummary.slice(0, 30)}...）`);
         reports.push(report);
       }
     }
 
     // Phase 2: Identify disagreements
-    if (this.config.verbose) {
-      console.log('\n🔍 Phase 2: 对比各流派结论，识别分歧...');
-    }
+    progress('\n🔍 Phase 2: 对比各流派结论，识别分歧...');
 
     const disagreedDimensions = this.debate.identifyDisagreements(reports);
 
-    if (this.config.verbose) {
-      if (disagreedDimensions.length === 0) {
-        console.log('  🤝 三派观点高度一致，无需辩论');
-      } else {
-        console.log(`  ⚡ 发现 ${disagreedDimensions.length} 个维度存在分歧: ${disagreedDimensions.join(', ')}`);
-      }
+    if (disagreedDimensions.length === 0) {
+      progress('  🤝 三派观点高度一致，无需辩论');
+    } else {
+      progress(`  ⚡ 发现 ${disagreedDimensions.length} 个维度存在分歧: ${disagreedDimensions.join(', ')}`);
     }
 
     // Phase 3: Batch debate for all disputed dimensions (single judge call)
     let debates: DebateConsensus[] | undefined;
     if (disagreedDimensions.length > 0) {
-      if (this.config.verbose) {
-        console.log('\n🏛️  Phase 3: 启动辩论协调 (批量裁判)...');
-      }
+      progress('\n🏛️  Phase 3: 启动辩论协调 (批量裁判)...');
 
       debates = await this.debate.conductAllDebates(
         disagreedDimensions, reports, this.agents, chart, this.config.agentOptions,
@@ -143,24 +141,20 @@ export class Orchestrator {
     }
 
     // Phase 4: Synthesize
-    if (this.config.verbose) {
-      console.log('\n📝 Phase 4: 综合各流派结论...');
-    }
+    progress('\n📝 Phase 4: 综合各流派结论...');
 
     const synthesized = this.synthesizeReports(reports, debates, dimensions);
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    if (this.config.verbose) {
-      console.log('\n' + '═'.repeat(60));
-      console.log(`🎭 多流派分析完成 (${elapsed}s)`);
-      console.log(`📊 一致率: ${synthesized.meta.agreementRate}%`);
-      if (synthesized.meta.debatedDimensions.length > 0) {
-        console.log(`⚡ 辩论维度: ${synthesized.meta.debatedDimensions.join(', ')}`);
-      } else {
-        console.log('⚡ 辩论维度: 无');
-      }
-      console.log('═'.repeat(60));
+    progress('\n' + '═'.repeat(60));
+    progress(`🎭 多流派分析完成 (${elapsed}s)`);
+    progress(`📊 一致率: ${synthesized.meta.agreementRate}%`);
+    if (synthesized.meta.debatedDimensions.length > 0) {
+      progress(`⚡ 辩论维度: ${synthesized.meta.debatedDimensions.join(', ')}`);
+    } else {
+      progress('⚡ 辩论维度: 无');
     }
+    progress('═'.repeat(60));
 
     return synthesized;
   }
@@ -294,19 +288,19 @@ export class Orchestrator {
     if (!agent) throw new Error(`未知流派: ${schoolId}`);
 
     const startTime = Date.now();
+    const progress = (msg: string) => {
+      if (this.config.onProgress) this.config.onProgress(msg);
+      if (this.config.verbose) console.log(msg);
+    };
 
-    if (this.config.verbose) {
-      console.log('\n' + '═'.repeat(60));
-      console.log(`🔮 FateRead 单流派分析 — ${agent.name}`);
-      console.log('═'.repeat(60));
-      console.log(`📊 分析维度: ${dimensions.join(', ')}`);
-    }
+    progress('\n' + '═'.repeat(60));
+    progress(`🔮 FateRead 单流派分析 — ${agent.name}`);
+    progress('═'.repeat(60));
+    progress(`📊 分析维度: ${dimensions.join(', ')}`);
 
     const report = await agent.analyze(chart, profile, dimensions, this.config.agentOptions);
 
-    if (this.config.verbose) {
-      console.log(`  ✅ ${agent.name} 分析完成（格局: ${report.patternSummary.slice(0, 30)}...）`);
-    }
+    progress(`  ✅ ${agent.name} 分析完成（格局: ${report.patternSummary.slice(0, 30)}...）`);
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
@@ -334,11 +328,9 @@ export class Orchestrator {
       },
     };
 
-    if (this.config.verbose) {
-      console.log('\n' + '═'.repeat(60));
-      console.log(`🔮 单流派分析完成 (${elapsed}s) — ${agent.name}`);
-      console.log('═'.repeat(60));
-    }
+    progress('\n' + '═'.repeat(60));
+    progress(`🔮 单流派分析完成 (${elapsed}s) — ${agent.name}`);
+    progress('═'.repeat(60));
 
     return synthesized;
   }

@@ -345,13 +345,50 @@ export class FateReadAgent {
 
         yield { type: 'tool_start', content: funcName };
 
+        // Progress queue for multi_school_analyze to stream internal progress
+        const progressQueue: string[] = [];
+        if (funcName === 'multi_school_analyze') {
+          this.state.onProgress = (msg: string) => {
+            progressQueue.push(msg);
+          };
+        }
+
         let result: string;
         try {
-          result = await executeTool(funcName, funcArgs, this.state);
-          anyToolSucceeded = true;
+          const toolPromise = executeTool(funcName, funcArgs, this.state);
+
+          // Poll progress queue while tool executes
+          while (true) {
+            const done = await Promise.race([
+              toolPromise.then(() => true),
+              new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 80)),
+            ]);
+
+            // Yield any queued progress messages
+            while (progressQueue.length > 0) {
+              const msg = progressQueue.shift()!;
+              yield { type: 'progress', content: msg };
+            }
+
+            if (done) {
+              result = await toolPromise;
+              anyToolSucceeded = true;
+              break;
+            }
+          }
         } catch (toolError: unknown) {
           const msg = toolError instanceof Error ? toolError.message : String(toolError);
           result = JSON.stringify({ error: `工具执行失败: ${msg}` });
+        }
+
+        // Clean up progress callback
+        if (funcName === 'multi_school_analyze') {
+          this.state.onProgress = undefined;
+          // Yield any remaining progress
+          while (progressQueue.length > 0) {
+            const msg = progressQueue.shift()!;
+            yield { type: 'progress', content: msg };
+          }
         }
 
         const compressed = compressToolResult(funcName, result);

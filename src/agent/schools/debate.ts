@@ -26,6 +26,8 @@ export interface DebateConfig {
   similarityThreshold: number;
   maxRounds: number;
   verbose: boolean;
+  /** 进度回调，用于 TUI 实时显示辩论过程 */
+  onProgress?: (message: string) => void;
 }
 
 const DEFAULT_CONFIG: DebateConfig = {
@@ -43,6 +45,9 @@ export class DebateProtocol {
   constructor(config: Partial<DebateConfig> = {}, sharedClient?: OpenAI) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.sharedClient = sharedClient;
+    if (config.onProgress) {
+      this.config.onProgress = config.onProgress;
+    }
   }
 
   identifyDisagreements(reports: SchoolReport[]): AnalysisDimension[] {
@@ -101,13 +106,16 @@ export class DebateProtocol {
   ): Promise<DebateConsensus[]> {
     if (dimensions.length === 0) return [];
 
+    const progress = (msg: string) => {
+      if (this.config.onProgress) this.config.onProgress(msg);
+      if (this.config.verbose) console.log(msg);
+    };
+
     const allInitialStatements: Map<AnalysisDimension, DebateStatement[]> = new Map();
 
     // Single round: collect all statements for all dimensions
     for (const dim of dimensions) {
-      if (this.config.verbose) {
-        console.log(`\n🏛️  开始辩论: ${dim} 维度`);
-      }
+      progress(`\n🏛️  开始辩论: ${dim} 维度`);
 
       const statements: DebateStatement[] = [];
       for (const report of reports) {
@@ -123,16 +131,14 @@ export class DebateProtocol {
       }
       allInitialStatements.set(dim, statements);
 
-      if (this.config.verbose) {
-        for (const stmt of statements) {
-          console.log(`  📣 ${SCHOOL_NAMES[stmt.schoolId]}：${stmt.position.slice(0, 50)}...`);
-        }
+      for (const stmt of statements) {
+        progress(`  📣 ${SCHOOL_NAMES[stmt.schoolId]}：${stmt.position.slice(0, 50)}...`);
       }
     }
 
     // Single round of counter-arguments
     for (const dim of dimensions) {
-      if (this.config.verbose) console.log(`  🔄 辩论 (单轮)...`);
+      progress(`  🔄 辩论 (单轮)...`);
 
       const initialStatements = allInitialStatements.get(dim) || [];
 
@@ -157,10 +163,8 @@ export class DebateProtocol {
     // Batch judge: one LLM call for all dimensions
     const allConsensuses = await this.batchSynthesize(dimensions, allInitialStatements, options);
 
-    if (this.config.verbose) {
-      for (const c of allConsensuses) {
-        console.log(`  ✅ ${c.dimension}: ${c.consensus.slice(0, 60)}... (信心度: ${c.confidence}%)`);
-      }
+    for (const c of allConsensuses) {
+      progress(`  ✅ ${c.dimension}: ${c.consensus.slice(0, 60)}... (信心度: ${c.confidence}%)`);
     }
 
     return allConsensuses;

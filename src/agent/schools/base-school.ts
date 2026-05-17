@@ -34,6 +34,8 @@ export abstract class BaseSchoolAgent implements SchoolAgent {
   /** Shared client (injected by orchestrator for reuse) */
   sharedClient?: OpenAI;
   tokenTracker?: TokenTracker;
+  /** 进度回调，用于 TUI 实时显示分析过程 */
+  onProgress?: (message: string) => void;
 
   constructor(id: SchoolId) {
     this.id = id;
@@ -81,6 +83,12 @@ export abstract class BaseSchoolAgent implements SchoolAgent {
     const maxTokens = this.getMaxTokens(options);
     const chartData = this.formatChartData(chart, profile);
     const systemPrompt = this.getSystemPrompt();
+
+    const progress = (msg: string) => {
+      if (this.onProgress) this.onProgress(msg);
+    };
+
+    progress(`    🧠 ${this.name} 正在解读命盘...`);
 
     const dimensionList = dimensions.map(d => `"${d}"`).join(', ');
     const userPrompt = `以下是缘主的命盘数据和纬线信息，请从${this.name}的视角进行分析。
@@ -130,10 +138,11 @@ ${chartData}
 
       const message = response.choices[0]?.message as unknown as Record<string, unknown> | undefined;
       const content = extractContent(message);
+      progress(`    ✅ ${this.name} 解读完成`);
       return this.parseAnalysisResponse(content, dimensions);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error(`⚠️  ${this.name}分析失败: ${msg}`);
+      progress(`    ⚠️  ${this.name}解读失败: ${msg}`);
       return this.createFallbackReport(dimensions, msg);
     }
   }
