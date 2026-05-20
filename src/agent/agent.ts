@@ -460,6 +460,19 @@ export class FateReadAgent {
   }
 
   /**
+   * Switch persona/school mid-session. Updates active school, rebuilds system prompt.
+   */
+  switchPersona(schoolId: SchoolId): string {
+    this.school = schoolId;
+    this.state.activeSchool = schoolId;
+    const skillCatalog = buildSkillCatalog(this.state.skills);
+    const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
+    this.messages[0] = { role: 'system', content: systemPrompt };
+    this.persist(this.messages[0]);
+    return schoolId;
+  }
+
+  /**
    * Start a brand new session, saving the current one to DB.
    */
   newSession(): string {
