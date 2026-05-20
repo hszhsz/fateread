@@ -436,16 +436,36 @@ async function handleCommand(input: string, ctx: CommandContext): Promise<void> 
 
   if (cmd === '/persona') {
     const schoolArg = parts[1]?.toLowerCase();
-    if (!schoolArg || !['ziping', 'ziwei', 'mangpai'].includes(schoolArg)) {
-      console.log(chalk.yellow('\n⚠️  用法: /persona <ziping|ziwei|mangpai>\n'));
-      console.log(chalk.dim('   ziping  — 注重逻辑的子平学者'));
-      console.log(chalk.dim('   ziwei  — 温婉知心紫薇先生'));
-      console.log(chalk.dim('   mangpai — 铁口直断盲派大师\n'));
+    if (schoolArg && ['ziping', 'ziwei', 'mangpai'].includes(schoolArg)) {
+      // Direct switch with argument
+      agent.switchPersona(schoolArg as SchoolId);
+      sep();
+      console.log(chalk.green(`\n🎭 已切换人设: ${SCHOOL_NAMES[schoolArg as SchoolId]}\n`));
       return;
     }
-    agent.switchPersona(schoolArg as SchoolId);
-    sep();
-    console.log(chalk.green(`\n🎭 已切换人设: ${SCHOOL_NAMES[schoolArg as SchoolId]}\n`));
+
+    // No valid arg — pop up interactive menu
+    const personaChoices = [
+      { name: '📐 注重逻辑的子平学者', value: 'ziping', description: '严谨理性，深入浅出，以经典依据给出逻辑清晰的解读' },
+      { name: '🌸 温婉知心紫薇先生', value: 'ziwei', description: '温雅知性，先共情后解读，以星曜之美化解人生困惑' },
+      { name: '⚔️ 铁口直断盲派大师', value: 'mangpai', description: '直率果敢，一针见血，每断必附化解之法' },
+    ];
+    const choice = await search({
+      message: '选择人设',
+      source: (term) => {
+        if (!term) return personaChoices;
+        const t = term.toLowerCase();
+        return personaChoices.filter(
+          (c) => c.value.includes(t) || c.description.toLowerCase().includes(t) || c.name.toLowerCase().includes(t),
+        );
+      },
+      pageSize: 3,
+    });
+    if (choice) {
+      agent.switchPersona(choice as SchoolId);
+      sep();
+      console.log(chalk.green(`\n🎭 已切换人设: ${SCHOOL_NAMES[choice as SchoolId]}\n`));
+    }
     return;
   }
 
