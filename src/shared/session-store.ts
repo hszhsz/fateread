@@ -29,6 +29,7 @@ export interface SessionData {
   messages: Message[];
   profile: UserProfile | null;
   chart: BaziChart | null;
+  userId: string | null;
 }
 
 // ============================================================
@@ -95,13 +96,14 @@ export function saveSession(
   messages: Message[],
   profile: UserProfile | null,
   chart: BaziChart | null,
+  userId?: string | null,
 ): void {
   // Ensure session row exists
   const existing = dbGetSession(id);
   if (existing) {
-    dbUpdateSession(id, profile, chart);
+    dbUpdateSession(id, profile, chart, userId);
   } else {
-    dbCreateSession(id, profile, chart);
+    dbCreateSession(id, profile, chart, userId);
   }
 
   // Replace all messages for this session
@@ -125,6 +127,7 @@ export function appendMessage(
   message: Message,
   profile?: UserProfile | null,
   chart?: BaziChart | null,
+  userId?: string | null,
 ): void {
   dbAddMessage(sessionId, {
     role: message.role,
@@ -135,8 +138,8 @@ export function appendMessage(
     reasoning_content: message.reasoning_content || null,
   });
 
-  if (profile !== undefined || chart !== undefined) {
-    dbUpdateSession(sessionId, profile, chart);
+  if (profile !== undefined || chart !== undefined || userId !== undefined) {
+    dbUpdateSession(sessionId, profile, chart, userId);
   }
 }
 
@@ -156,6 +159,7 @@ export function loadSession(id: string): SessionData | null {
     messages,
     profile: row.profile ? (JSON.parse(row.profile) as UserProfile) : null,
     chart: row.chart ? (JSON.parse(row.chart) as BaziChart) : null,
+    userId: row.user_id || null,
   };
 }
 

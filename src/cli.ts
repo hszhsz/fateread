@@ -24,6 +24,7 @@ import { CITY_LONGITUDE } from './core/solar-time.js';
 import { listSessions, deleteSession } from './shared/session-store.js';
 import type { SchoolId } from './agent/schools/types.js';
 import { SCHOOL_NAMES } from './agent/schools/types.js';
+import { getMemories, deleteMemory, getUser } from './shared/memory-store.js';
 
 const BANNER = `
 ╔══════════════════════════════════════════════════════╗
@@ -53,6 +54,9 @@ const HELP = `
   /paipan        直接排盘（无需 AI，快速查看命盘）
   /new           开始新会话（自动保存当前会话）
   /persona <流派> 切换人设: ziping / ziwei / mangpai
+  /whoami        查看当前缘主信息（识别状态 + 来访记录）
+  /memory        查看当前缘主的记忆（key facts + 偏好 + 洞察）
+  /memory del <id> 删除指定记忆
   /reset         重置对话
   /save [id]     保存当前会话（可选指定会话名）
   /load <id>     加载之前保存的会话
@@ -89,6 +93,8 @@ const COMMANDS: Command[] = [
   { name: '⚙️  /paipan', value: '/paipan', description: '直接排盘（无需 AI，快速查看命盘）' },
   { name: '🆕 /new', value: '/new', description: '开始新会话（自动保存当前会话）' },
   { name: '🎭 /persona', value: '/persona', description: '切换人设: ziping / ziwei / mangpai' },
+  { name: '👤 /whoami', value: '/whoami', description: '查看当前缘主信息' },
+  { name: '🧠 /memory', value: '/memory', description: '查看/管理缘主记忆' },
   { name: '🔄 /reset', value: '/reset', description: '重置对话' },
   { name: '💾 /save', value: '/save', description: '保存当前会话' },
   { name: '📂 /load', value: '/load', description: '加载之前保存的会话' },
@@ -524,12 +530,118 @@ async function handleCommand(input: string, ctx: CommandContext): Promise<void> 
     return;
   }
 
+  if (cmd === '/whoami') {
+    handleWhoami(agent);
+    return;
+  }
+
+  if (cmd === '/memory') {
+    const subCmd = parts[1];
+    if (subCmd === 'del' || subCmd === 'delete') {
+      const memoryId = parseInt(parts[2]);
+      if (isNaN(memoryId)) {
+        console.log(chalk.yellow('\n⚠️  用法: /memory del <记忆ID>\n'));
+        return;
+      }
+      handleMemoryDelete(agent, memoryId);
+    } else {
+      handleMemoryList(agent);
+    }
+    return;
+  }
+
   if (cmd === '/paipan') {
     await interactivePaipan();
     return;
   }
 
   console.log(chalk.yellow(`\n未知命令: ${input}，输入 / 打开命令菜单\n`));
+}
+
+// ============================================================
+// Memory command handlers
+// ============================================================
+
+function handleWhoami(agent: FateReadAgent): void {
+  sep();
+  const userId = agent.getUserId();
+  if (!userId) {
+    console.log(chalk.dim('\n👤 当前缘主尚未识别。'));
+    console.log(chalk.dim('   请在对话中提供出生信息，系统将自动识别。\n'));
+    return;
+  }
+
+  const user = getUser(userId);
+  if (!user) {
+    console.log(chalk.yellow('\n⚠️  用户数据异常，未找到记录。\n'));
+    return;
+  }
+
+  const returningLabel = user.visit_count > 1
+    ? chalk.green(`回头客（第 ${user.visit_count} 次来访）`)
+    : chalk.yellow('首次来访');
+
+  console.log(chalk.cyan(`\n👤 缘主信息\n`));
+  console.log(`   ${returningLabel}`);
+  if (user.birth_year) {
+    const genderLabel = user.gender === 'male' ? '男' : user.gender === 'female' ? '女' : '';
+    const birthStr = `${user.birth_year}/${user.birth_month}/${user.birth_day} ${user.birth_hour}时 ${genderLabel}`;
+    console.log(`   出生：${birthStr}${user.birth_city ? ' ' + user.birth_city : ''}`);
+  }
+  if (user.nickname) {
+    console.log(`   昵称：${user.nickname}`);
+  }
+  console.log(`   首次来访：${user.first_seen_at?.slice(0, 10) || '-'}`);
+  console.log(`   最近来访：${user.last_seen_at?.slice(0, 10) || '-'}`);
+  console.log('');
+}
+
+function handleMemoryList(agent: FateReadAgent): void {
+  sep();
+  const userId = agent.getUserId();
+  if (!userId) {
+    console.log(chalk.dim('\n🧠 当前缘主尚未识别，暂无记忆。'));
+    console.log(chalk.dim('   请在对话中提供出生信息，系统将自动识别并建立记忆。\n'));
+    return;
+  }
+
+  const memories = getMemories(userId);
+  if (memories.length === 0) {
+    console.log(chalk.dim('\n🧠 暂无记忆。多和缘主聊几次，我会记住关键信息。\n'));
+    return;
+  }
+
+  const typeLabel: Record<string, string> = {
+    fact: '📋 事实',
+    preference: '⭐ 偏好',
+    insight: '💡 洞察',
+    summary: '📝 会话摘要',
+  };
+
+  console.log(chalk.cyan(`\n🧠 缘主记忆 (共 ${memories.length} 条)\n`));
+  for (const m of memories) {
+    const label = typeLabel[m.type] || m.type;
+    const importanceStars = '★'.repeat(m.importance) + '☆'.repeat(5 - m.importance);
+    console.log(`  ${chalk.white(`#${m.id}`)} ${label} ${chalk.yellow(importanceStars)}`);
+    console.log(`  ${chalk.dim('└')} ${m.content}`);
+    console.log('');
+  }
+}
+
+function handleMemoryDelete(agent: FateReadAgent, memoryId: number): void {
+  sep();
+  const userId = agent.getUserId();
+  if (!userId) {
+    console.log(chalk.yellow('\n⚠️  当前缘主尚未识别。\n'));
+    return;
+  }
+
+  try {
+    deleteMemory(memoryId);
+    console.log(chalk.green(`\n🗑️  记忆 #${memoryId} 已删除\n`));
+  } catch {
+    console.log(chalk.red(`\n❌ 删除记忆 #${memoryId} 失败\n`));
+  }
 }
 
 // ============================================================

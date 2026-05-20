@@ -299,11 +299,25 @@ function buildSchoolSection(state: SessionState): string {
 }
 
 /**
- * Build the complete system prompt with intake hint, school identity, persona, and debate config.
+ * Build the complete system prompt with intake hint, school identity, persona, debate config, and memory.
  */
-export function buildSystemPrompt(state: SessionState): string {
+export function buildSystemPrompt(state: SessionState, memoryContext = '', returningUserGreeting = ''): string {
   const hint = state.getIntakeHint();
   const schoolSection = buildSchoolSection(state);
   const personaPrompt = getPersonaPrompt(state.activeSchool);
-  return SYSTEM_PROMPT + schoolSection + personaPrompt + '\n\n## 当前采集步骤\n\n' + hint;
+
+  let prompt = SYSTEM_PROMPT + schoolSection + personaPrompt;
+
+  // Inject returning user greeting (if applicable) — goes before the intake hint
+  if (returningUserGreeting && state.isReturningUser) {
+    prompt += returningUserGreeting;
+  }
+
+  // Inject memory context (if applicable) — full user history
+  if (memoryContext && state.isReturningUser) {
+    prompt += memoryContext;
+  }
+
+  prompt += '\n\n## 当前采集步骤\n\n' + hint;
+  return prompt;
 }

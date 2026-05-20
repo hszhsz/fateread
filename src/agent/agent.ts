@@ -36,6 +36,13 @@ import type { SessionData } from '../shared/session-store.js';
 import { dbCreateSession, dbUpdateSession } from '../shared/database.js';
 import type { UserProfile } from '../core/types.js';
 import type { BaziChart } from '../core/types.js';
+import {
+  buildMemoryContext,
+  buildReturningUserGreeting,
+  getMemories,
+  addSessionSummary,
+  pruneMemories,
+} from '../shared/memory-store.js';
 
 // ============================================================
 // Types
@@ -172,6 +179,8 @@ export class FateReadAgent {
   private sessionId: string;
   private school: SchoolId;
   private debate: boolean;
+  private memoryContext = '';
+  private returningUserGreeting = '';
 
   constructor(options: AgentOptions = {}) {
     this.client = createLlmClient({
@@ -191,6 +200,11 @@ export class FateReadAgent {
     this.state = new SessionState(this.tokenTracker, this.school, this.debate);
     this.state.loadSkills(options.skillsDir);
 
+    // Wire up user identification callback for memory system
+    this.state.onUserIdentified = (userId: string, isReturning: boolean) => {
+      this.onUserIdentified(userId, isReturning);
+    };
+
     const skillCatalog = buildSkillCatalog(this.state.skills);
 
     // Build system prompt with school/debate context
@@ -200,8 +214,8 @@ export class FateReadAgent {
     this.sessionId = generateSessionId();
 
     // Initialize session in SQLite
-    dbCreateSession(this.sessionId, null, null);
-    appendMessage(this.sessionId, this.messages[0], null, null);
+    dbCreateSession(this.sessionId, null, null, this.state.userId);
+    appendMessage(this.sessionId, this.messages[0], null, null, this.state.userId);
   }
 
   // ============================================================
@@ -445,17 +459,36 @@ export class FateReadAgent {
    */
   reset(): void {
     // Save current session to DB before resetting
-    saveSession(this.sessionId, this.messages, this.state.profile, this.state.chart);
+    this.finalizeSession();
 
+    const prevUserId = this.state.userId;
     this.state = new SessionState(this.tokenTracker, this.school, this.debate);
     this.state.loadSkills();
+
+    // Re-wire user identification callback
+    this.state.onUserIdentified = (userId: string, isReturning: boolean) => {
+      this.onUserIdentified(userId, isReturning);
+    };
+
+    // Preserve user context if a user was identified
+    if (prevUserId) {
+      this.state.userId = prevUserId;
+      this.state.isReturningUser = true;
+      this.memoryContext = buildMemoryContext(prevUserId);
+      this.returningUserGreeting = buildReturningUserGreeting(prevUserId);
+      this.state.intake.step = 'concerns';
+    } else {
+      this.memoryContext = '';
+      this.returningUserGreeting = '';
+    }
+
     const skillCatalog = buildSkillCatalog(this.state.skills);
-    const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
+    const systemPrompt = buildSystemPrompt(this.state, this.memoryContext, this.returningUserGreeting) + '\n\n' + skillCatalog;
     this.messages = [{ role: 'system', content: systemPrompt }];
     this.sessionId = generateSessionId();
 
     // Initialize new session in SQLite
-    dbCreateSession(this.sessionId, null, null);
+    dbCreateSession(this.sessionId, null, null, this.state.userId);
     this.persist(this.messages[0]);
   }
 
@@ -466,7 +499,7 @@ export class FateReadAgent {
     this.school = schoolId;
     this.state.activeSchool = schoolId;
     const skillCatalog = buildSkillCatalog(this.state.skills);
-    const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
+    const systemPrompt = buildSystemPrompt(this.state, this.memoryContext, this.returningUserGreeting) + '\n\n' + skillCatalog;
     this.messages[0] = { role: 'system', content: systemPrompt };
     this.persist(this.messages[0]);
     return schoolId;
@@ -476,19 +509,39 @@ export class FateReadAgent {
    * Start a brand new session, saving the current one to DB.
    */
   newSession(): string {
-    // Save current session to DB first
-    saveSession(this.sessionId, this.messages, this.state.profile, this.state.chart);
+    // Save current session to DB with memory finalization
+    this.finalizeSession();
 
     const oldId = this.sessionId;
+    const prevUserId = this.state.userId;
+
     this.state = new SessionState(this.tokenTracker, this.school, this.debate);
     this.state.loadSkills();
+
+    // Re-wire user identification callback
+    this.state.onUserIdentified = (userId: string, isReturning: boolean) => {
+      this.onUserIdentified(userId, isReturning);
+    };
+
+    // Preserve user context
+    if (prevUserId) {
+      this.state.userId = prevUserId;
+      this.state.isReturningUser = true;
+      this.memoryContext = buildMemoryContext(prevUserId);
+      this.returningUserGreeting = buildReturningUserGreeting(prevUserId);
+      this.state.intake.step = 'concerns';
+    } else {
+      this.memoryContext = '';
+      this.returningUserGreeting = '';
+    }
+
     const skillCatalog = buildSkillCatalog(this.state.skills);
-    const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
+    const systemPrompt = buildSystemPrompt(this.state, this.memoryContext, this.returningUserGreeting) + '\n\n' + skillCatalog;
     this.messages = [{ role: 'system', content: systemPrompt }];
     this.sessionId = generateSessionId();
 
     // Initialize new session in SQLite
-    dbCreateSession(this.sessionId, null, null);
+    dbCreateSession(this.sessionId, null, null, this.state.userId);
     this.persist(this.messages[0]);
 
     return oldId;
@@ -499,7 +552,7 @@ export class FateReadAgent {
    */
   saveSession(customId?: string): string {
     const id = customId || this.sessionId;
-    saveSession(id, this.messages, this.state.profile, this.state.chart);
+    saveSession(id, this.messages, this.state.profile, this.state.chart, this.state.userId);
     return id;
   }
 
@@ -520,9 +573,17 @@ export class FateReadAgent {
       this.state.chart = data.chart;
     }
 
+    // Restore user context if available
+    if (data.userId) {
+      this.state.userId = data.userId;
+      this.state.isReturningUser = true;
+      this.memoryContext = buildMemoryContext(data.userId);
+      this.returningUserGreeting = buildReturningUserGreeting(data.userId);
+    }
+
     // Rebuild system prompt
     const skillCatalog = buildSkillCatalog(this.state.skills);
-    const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
+    const systemPrompt = buildSystemPrompt(this.state, this.memoryContext, this.returningUserGreeting) + '\n\n' + skillCatalog;
     this.messages[0] = { role: 'system', content: systemPrompt };
 
     return true;
@@ -530,6 +591,14 @@ export class FateReadAgent {
 
   getSessionId(): string {
     return this.sessionId;
+  }
+
+  getUserId(): string | null {
+    return this.state.userId;
+  }
+
+  isReturningUser(): boolean {
+    return this.state.isReturningUser;
   }
 
   getChart(): BaziChart | null {
@@ -553,10 +622,67 @@ export class FateReadAgent {
   // ============================================================
 
   /**
+   * Finalize the current session: save to DB, add session summary memory, prune old memories.
+   */
+  private finalizeSession(): void {
+    // Save session with current data
+    saveSession(this.sessionId, this.messages, this.state.profile, this.state.chart, this.state.userId);
+
+    // Add a session summary memory if we have a user
+    if (this.state.userId) {
+      try {
+        const charts = this.state.chart;
+        const concerns = this.state.profile?.concerns;
+        const summaryParts: string[] = [];
+
+        if (charts) {
+          const dayPillar = charts.fourPillars.day;
+          const schoolName = this.school;
+          summaryParts.push(`使用${schoolName}流派进行命理分析`);
+        }
+
+        if (concerns && concerns.length > 0) {
+          summaryParts.push(`主要关注: ${concerns.join('、')}`);
+        }
+
+        const messageCount = this.messages.filter(m => m.role === 'user').length;
+        summaryParts.push(`共${messageCount}轮对话`);
+
+        if (summaryParts.length > 0) {
+          addSessionSummary(this.state.userId, summaryParts.join('。'), this.sessionId);
+        }
+
+        // Prune old memories to keep the store manageable
+        pruneMemories(this.state.userId, 50);
+      } catch {
+        // Silently ignore memory errors
+      }
+    }
+  }
+
+  /**
    * Persist a message to SQLite and update session state.
    */
   private persist(msg: Message): void {
-    appendMessage(this.sessionId, msg, this.state.profile, this.state.chart);
+    appendMessage(this.sessionId, msg, this.state.profile, this.state.chart, this.state.userId);
+  }
+
+  /**
+   * Called when the memory system identifies a user (new or returning).
+   * Rebuilds the system prompt with memory context and adjusts intake.
+   */
+  private onUserIdentified(userId: string, isReturning: boolean): void {
+    if (isReturning) {
+      // Build memory context for the returning user
+      this.memoryContext = buildMemoryContext(userId);
+      this.returningUserGreeting = buildReturningUserGreeting(userId);
+
+      // For returning users, skip the intake process — they're already known
+      this.state.intake.step = 'concerns';
+    }
+
+    // Rebuild system prompt with memory injection
+    this.updateSystemPromptIntake();
   }
 
   /**
@@ -565,7 +691,7 @@ export class FateReadAgent {
    */
   private updateSystemPromptIntake(): void {
     const skillCatalog = buildSkillCatalog(this.state.skills);
-    const systemPrompt = buildSystemPrompt(this.state);
+    const systemPrompt = buildSystemPrompt(this.state, this.memoryContext, this.returningUserGreeting);
     if (this.messages.length > 0 && this.messages[0].role === 'system') {
       this.messages[0] = {
         role: 'system',

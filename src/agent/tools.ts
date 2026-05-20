@@ -26,6 +26,11 @@ import {
   getIntakeSummary,
 } from '../shared/intake-state.js';
 import type { IntakeState, IntakeStep } from '../shared/intake-state.js';
+import {
+  findOrCreateUser,
+  extractMemoriesFromProfile,
+  buildMemoryContext,
+} from '../shared/memory-store.js';
 
 // ============================================================
 // Tool Definitions (OpenAI function calling format)
@@ -210,6 +215,12 @@ export class SessionState {
   debateMode: boolean;
   /** 进度回调，用于 TUI 实时显示分析过程 */
   onProgress?: (message: string) => void;
+  /** Memory system: current user ID (null until identified) */
+  userId: string | null = null;
+  /** Memory system: whether this is a returning user */
+  isReturningUser = false;
+  /** Memory system: callback to notify when a user is identified */
+  onUserIdentified?: (userId: string, isReturning: boolean) => void;
 
   constructor(tokenTracker?: TokenTracker, activeSchool: SchoolId = 'ziping', debateMode = false) {
     this.outputDir = getDefaultOutputDir();
@@ -481,15 +492,54 @@ function executeUpdateProfile(args: Record<string, unknown>, state: SessionState
   state.intake.profile = p;
   advanceIntake(state.intake);
 
+  // Memory: try to identify user once basic info is complete
+  if (!state.userId && p.birthYear && p.birthMonth && p.birthDay &&
+      p.birthHour !== undefined && p.gender) {
+    try {
+      const { user, isReturning } = findOrCreateUser(p);
+      state.userId = user.id;
+      state.isReturningUser = isReturning;
+
+      // Extract structured memories from profile
+      if (p.intakeComplete) {
+        extractMemoriesFromProfile(user.id, p);
+      }
+
+      // Notify agent to rebuild system prompt
+      if (state.onUserIdentified) {
+        state.onUserIdentified(user.id, isReturning);
+      }
+    } catch {
+      // Silently ignore memory errors — don't interrupt the main flow
+    }
+  }
+
+  // Memory: update existing user profile when intake completes
+  if (state.userId && p.intakeComplete) {
+    try {
+      extractMemoriesFromProfile(state.userId, p);
+    } catch {
+      // Silently ignore
+    }
+  }
+
   const progress = getIntakeProgress(p);
 
-  return JSON.stringify({
+  const result: Record<string, unknown> = {
     success: true,
     message: '缘主画像已更新',
     progress,
     intake_step: state.intake.step,
     intake_hint: getStepPromptHint(state.intake),
-  }, null, 2);
+  };
+
+  // Include returning user flag for LLM awareness
+  if (state.isReturningUser) {
+    result.is_returning_user = true;
+    result.user_identified = true;
+  }
+
+  return JSON.stringify(result, null, 2);
 }
 
 function executeGetProfile(state: SessionState): string {

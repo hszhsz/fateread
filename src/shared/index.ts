@@ -35,3 +35,23 @@ export {
   getIntakeSummary,
 } from './intake-state.js';
 export type { IntakeState, IntakeStep } from './intake-state.js';
+export {
+  generateUserId,
+  identifyReturningUser,
+  findOrCreateUser,
+  getUser,
+  listUsers,
+  addMemory,
+  addFactMemory,
+  addPreferenceMemory,
+  addInsightMemory,
+  addSessionSummary,
+  getMemories,
+  pruneMemories,
+  deleteMemory,
+  updateMemoryImportance,
+  extractMemoriesFromProfile,
+  buildMemoryContext,
+  buildReturningUserGreeting,
+} from './memory-store.js';
+export type { MemoryType, UserMemory } from './memory-store.js';
