@@ -26,8 +26,14 @@ import {
   extractReasoning,
 } from '../shared/llm-client.js';
 import type { TokenTracker } from '../shared/llm-client.js';
-import { saveSession, loadSession, generateSessionId } from '../shared/session-store.js';
+import {
+  saveSession,
+  loadSession,
+  generateSessionId,
+  appendMessage,
+} from '../shared/session-store.js';
 import type { SessionData } from '../shared/session-store.js';
+import { dbCreateSession, dbUpdateSession } from '../shared/database.js';
 import type { UserProfile } from '../core/types.js';
 import type { BaziChart } from '../core/types.js';
 
@@ -192,6 +198,10 @@ export class FateReadAgent {
 
     this.messages.push({ role: 'system', content: systemPrompt });
     this.sessionId = generateSessionId();
+
+    // Initialize session in SQLite
+    dbCreateSession(this.sessionId, null, null);
+    appendMessage(this.sessionId, this.messages[0], null, null);
   }
 
   // ============================================================
@@ -208,7 +218,9 @@ export class FateReadAgent {
   }
 
   private async chatInternal(userMessage: string): Promise<string> {
-    this.messages.push({ role: 'user', content: userMessage });
+    const userMsg: Message = { role: 'user', content: userMessage };
+    this.messages.push(userMsg);
+    this.persist(userMsg);
 
     let iterations = 0;
     let consecutiveNoProgress = 0;
@@ -228,6 +240,7 @@ export class FateReadAgent {
           msg.reasoning_content = response.reasoning_content;
         }
         this.messages.push(msg);
+        this.persist(msg);
         this.updateSystemPromptIntake();
         return content;
       }
@@ -242,6 +255,7 @@ export class FateReadAgent {
         assistantMsg.reasoning_content = response.reasoning_content;
       }
       this.messages.push(assistantMsg);
+      this.persist(assistantMsg);
 
       let anyToolSucceeded = false;
 
@@ -263,11 +277,13 @@ export class FateReadAgent {
         // Compress tool result for context window
         const compressed = compressToolResult(funcName, result);
 
-        this.messages.push({
+        const toolMsg: Message = {
           role: 'tool',
           content: compressed,
           tool_call_id: toolCall.id,
-        });
+        };
+        this.messages.push(toolMsg);
+        this.persist(toolMsg);
       }
 
       // Smart termination: if no tool succeeded, it's likely a dead-end
@@ -294,7 +310,9 @@ export class FateReadAgent {
    * Streaming version — yields structured StreamEvents.
    */
   async *chatStream(userMessage: string): AsyncGenerator<StreamEvent, void, unknown> {
-    this.messages.push({ role: 'user', content: userMessage });
+    const userMsg: Message = { role: 'user', content: userMessage };
+    this.messages.push(userMsg);
+    this.persist(userMsg);
 
     let iterations = 0;
     let consecutiveNoProgress = 0;
@@ -317,6 +335,7 @@ export class FateReadAgent {
           msg.reasoning_content = streamResult.reasoningContent;
         }
         this.messages.push(msg);
+        this.persist(msg);
         this.updateSystemPromptIntake();
         return;
       }
@@ -336,6 +355,7 @@ export class FateReadAgent {
         assistantMsg.reasoning_content = streamResult.reasoningContent;
       }
       this.messages.push(assistantMsg);
+      this.persist(assistantMsg);
 
       let anyToolSucceeded = false;
 
@@ -393,11 +413,13 @@ export class FateReadAgent {
 
         const compressed = compressToolResult(funcName, result);
 
-        this.messages.push({
+        const toolMsg: Message = {
           role: 'tool',
           content: compressed,
           tool_call_id: toolCall.id,
-        });
+        };
+        this.messages.push(toolMsg);
+        this.persist(toolMsg);
 
         // Yield tool result progress
         yield {
@@ -419,28 +441,57 @@ export class FateReadAgent {
   }
 
   /**
-   * Reset the conversation.
+   * Reset the conversation in-memory. Saves current session to DB first.
    */
   reset(): void {
+    // Save current session to DB before resetting
+    saveSession(this.sessionId, this.messages, this.state.profile, this.state.chart);
+
     this.state = new SessionState(this.tokenTracker, this.school, this.debate);
     this.state.loadSkills();
     const skillCatalog = buildSkillCatalog(this.state.skills);
     const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
     this.messages = [{ role: 'system', content: systemPrompt }];
     this.sessionId = generateSessionId();
+
+    // Initialize new session in SQLite
+    dbCreateSession(this.sessionId, null, null);
+    this.persist(this.messages[0]);
   }
 
   /**
-   * Save current session to disk.
+   * Start a brand new session, saving the current one to DB.
+   */
+  newSession(): string {
+    // Save current session to DB first
+    saveSession(this.sessionId, this.messages, this.state.profile, this.state.chart);
+
+    const oldId = this.sessionId;
+    this.state = new SessionState(this.tokenTracker, this.school, this.debate);
+    this.state.loadSkills();
+    const skillCatalog = buildSkillCatalog(this.state.skills);
+    const systemPrompt = buildSystemPrompt(this.state) + '\n\n' + skillCatalog;
+    this.messages = [{ role: 'system', content: systemPrompt }];
+    this.sessionId = generateSessionId();
+
+    // Initialize new session in SQLite
+    dbCreateSession(this.sessionId, null, null);
+    this.persist(this.messages[0]);
+
+    return oldId;
+  }
+
+  /**
+   * Save current session to DB.
    */
   saveSession(customId?: string): string {
     const id = customId || this.sessionId;
-    const filepath = saveSession(id, this.messages, this.state.profile, this.state.chart);
-    return filepath;
+    saveSession(id, this.messages, this.state.profile, this.state.chart);
+    return id;
   }
 
   /**
-   * Load a session from disk and restore all state.
+   * Load a session from DB and restore all state.
    */
   loadSession(sessionId: string): boolean {
     const data = loadSession(sessionId);
@@ -487,6 +538,13 @@ export class FateReadAgent {
   // ============================================================
   // Internal
   // ============================================================
+
+  /**
+   * Persist a message to SQLite and update session state.
+   */
+  private persist(msg: Message): void {
+    appendMessage(this.sessionId, msg, this.state.profile, this.state.chart);
+  }
 
   /**
    * Update the system prompt with the current intake step hint.

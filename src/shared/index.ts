@@ -21,8 +21,11 @@ export {
   listSessions,
   deleteSession,
   generateSessionId,
+  appendMessage,
+  getDb,
 } from './session-store.js';
-export type { SessionData, SerializableMessage } from './session-store.js';
+export type { SessionData } from './session-store.js';
+export { closeDb as closeDatabase } from './database.js';
 export {
   createIntakeState,
   advanceIntake,

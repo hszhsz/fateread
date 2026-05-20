@@ -4,6 +4,9 @@ dist/
 .env
 outputs/
 logs/
+*.db
+*.db-wal
+*.db-shm
 
 benchmark/*.js
 benchmark/*.d.ts

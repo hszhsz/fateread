@@ -51,6 +51,7 @@ const HELP = `
 可用命令：
   /help          显示帮助信息
   /paipan        直接排盘（无需 AI，快速查看命盘）
+  /new           开始新会话（自动保存当前会话）
   /reset         重置对话
   /save [id]     保存当前会话（可选指定会话名）
   /load <id>     加载之前保存的会话
@@ -85,6 +86,7 @@ interface Command {
 
 const COMMANDS: Command[] = [
   { name: '⚙️  /paipan', value: '/paipan', description: '直接排盘（无需 AI，快速查看命盘）' },
+  { name: '🆕 /new', value: '/new', description: '开始新会话（自动保存当前会话）' },
   { name: '🔄 /reset', value: '/reset', description: '重置对话' },
   { name: '💾 /save', value: '/save', description: '保存当前会话' },
   { name: '📂 /load', value: '/load', description: '加载之前保存的会话' },
@@ -423,6 +425,13 @@ async function handleCommand(input: string, ctx: CommandContext): Promise<void> 
     return;
   }
 
+  if (cmd === '/new') {
+    const oldId = agent.newSession();
+    sep();
+    console.log(chalk.green(`\n🆕 已开始新会话 (旧会话已保存: ${oldId})\n`));
+    return;
+  }
+
   if (cmd === '/tokens') {
     sep();
     console.log('\n' + agent.getTokenReport() + '\n');
@@ -431,9 +440,9 @@ async function handleCommand(input: string, ctx: CommandContext): Promise<void> 
 
   if (cmd === '/save') {
     const customId = parts[1] || undefined;
-    const filepath = agent.saveSession(customId);
+    const id = agent.saveSession(customId);
     sep();
-    console.log(chalk.green(`\n💾 会话已保存: ${filepath}\n`));
+    console.log(chalk.green(`\n💾 会话已保存 (ID: ${id})\n`));
     return;
   }
 

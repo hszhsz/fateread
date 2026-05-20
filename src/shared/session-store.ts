@@ -1,13 +1,22 @@
 // ============================================================
-// FateRead - Session Persistence
-// Save/load/resume conversation sessions to/from disk
+// FateRead - Session Persistence (SQLite-backed)
+// Save/load/resume conversation sessions via SQLite
 // ============================================================
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
-import { resolve, join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import type { BaziChart, UserProfile } from '../core/types.js';
 import type { Message } from '../agent/agent.js';
+import {
+  dbCreateSession,
+  dbUpdateSession,
+  dbGetSession,
+  dbListSessions,
+  dbDeleteSession,
+  dbReplaceMessages,
+  dbGetMessages,
+  dbAddMessage,
+  getDb,
+} from './database.js';
+import type { MessageRow } from './database.js';
 
 // ============================================================
 // Types
@@ -17,79 +26,55 @@ export interface SessionData {
   id: string;
   createdAt: string;
   updatedAt: string;
-  messages: SerializableMessage[];
+  messages: Message[];
   profile: UserProfile | null;
   chart: BaziChart | null;
-}
-
-export interface SerializableMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
-  tool_calls?: { id: string; function: { name: string; arguments: string } }[];
-  tool_call_id?: string;
-  name?: string;
-  reasoning_content?: string;
-}
-
-// ============================================================
-// Session Directory
-// ============================================================
-
-function getSessionsDir(): string {
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-  return resolve(__dirname, '..', '..', 'sessions');
-}
-
-function ensureSessionsDir(): string {
-  const dir = getSessionsDir();
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  return dir;
 }
 
 // ============================================================
 // Serialize / Deserialize Messages
 // ============================================================
 
-function serializeMessages(messages: Message[]): SerializableMessage[] {
-  return messages.map((msg) => ({
-    role: msg.role,
-    content: msg.content,
-    tool_calls: msg.tool_calls?.map((tc) => ({
-      id: tc.id || '',
-      function: {
-        name: tc.function.name,
-        arguments: tc.function.arguments,
-      },
-    })),
-    tool_call_id: msg.tool_call_id,
-    name: msg.name,
-    reasoning_content: msg.reasoning_content,
-  }));
+function serializeMessage(msg: Message): string | null {
+  if (msg.tool_calls && msg.tool_calls.length > 0) {
+    return JSON.stringify(
+      msg.tool_calls.map((tc) => ({
+        id: tc.id || '',
+        function: { name: tc.function.name, arguments: tc.function.arguments },
+      })),
+    );
+  }
+  return null;
 }
 
-function deserializeMessages(serialized: SerializableMessage[]): Message[] {
-  return serialized.map((msg) => ({
-    role: msg.role,
-    content: msg.content,
-    tool_calls: msg.tool_calls?.map((tc) => ({
+function deserializeToolCalls(json: string | null): Message['tool_calls'] {
+  if (!json) return undefined;
+  try {
+    const arr = JSON.parse(json);
+    if (!Array.isArray(arr)) return undefined;
+    return arr.map((tc: { id: string; function: { name: string; arguments: string } }) => ({
       id: tc.id,
-      function: {
-        name: tc.function.name,
-        arguments: tc.function.arguments,
-      },
+      function: { name: tc.function.name, arguments: tc.function.arguments },
       type: 'function' as const,
-    })),
-    tool_call_id: msg.tool_call_id,
-    name: msg.name,
-    reasoning_content: msg.reasoning_content,
-  }));
+    }));
+  } catch {
+    return undefined;
+  }
+}
+
+function rowToMessage(row: MessageRow): Message {
+  return {
+    role: row.role as Message['role'],
+    content: row.content,
+    tool_calls: deserializeToolCalls(row.tool_calls),
+    tool_call_id: row.tool_call_id || undefined,
+    name: row.name || undefined,
+    reasoning_content: row.reasoning_content || undefined,
+  };
 }
 
 // ============================================================
-// Save / Load / Delete
+// Public API
 // ============================================================
 
 /**
@@ -103,103 +88,92 @@ export function generateSessionId(): string {
 }
 
 /**
- * Save the current session to disk.
+ * Save the current session to the database.
  */
 export function saveSession(
   id: string,
   messages: Message[],
   profile: UserProfile | null,
   chart: BaziChart | null,
-): string {
-  const dir = ensureSessionsDir();
+): void {
+  // Ensure session row exists
+  const existing = dbGetSession(id);
+  if (existing) {
+    dbUpdateSession(id, profile, chart);
+  } else {
+    dbCreateSession(id, profile, chart);
+  }
 
-  const data: SessionData = {
-    id,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    messages: serializeMessages(messages),
-    profile,
-    chart,
-  };
+  // Replace all messages for this session
+  const rows = messages.map((msg) => ({
+    role: msg.role,
+    content: msg.content,
+    tool_calls: serializeMessage(msg),
+    tool_call_id: msg.tool_call_id || null,
+    name: msg.name || null,
+    reasoning_content: msg.reasoning_content || null,
+  }));
 
-  const filepath = join(dir, `${id}.json`);
-  writeFileSync(filepath, JSON.stringify(data, null, 2), 'utf-8');
-  return filepath;
+  dbReplaceMessages(id, rows);
 }
 
 /**
- * Load a session from disk.
+ * Persist a single message. Used for incremental auto-save.
  */
-export function loadSession(id: string): SessionData | null {
-  const dir = ensureSessionsDir();
-  const filepath = join(dir, `${id}.json`);
+export function appendMessage(
+  sessionId: string,
+  message: Message,
+  profile?: UserProfile | null,
+  chart?: BaziChart | null,
+): void {
+  dbAddMessage(sessionId, {
+    role: message.role,
+    content: message.content,
+    tool_calls: serializeMessage(message),
+    tool_call_id: message.tool_call_id || null,
+    name: message.name || null,
+    reasoning_content: message.reasoning_content || null,
+  });
 
-  if (!existsSync(filepath)) {
-    // Try partial match
-    const files = readdirSync(dir);
-    const match = files.find((f) => f.startsWith(id));
-    if (match) {
-      return loadSessionFromFile(join(dir, match));
-    }
-    return null;
+  if (profile !== undefined || chart !== undefined) {
+    dbUpdateSession(sessionId, profile, chart);
   }
-
-  return loadSessionFromFile(filepath);
 }
 
-function loadSessionFromFile(filepath: string): SessionData | null {
-  try {
-    const raw = readFileSync(filepath, 'utf-8');
-    const data = JSON.parse(raw) as SessionData;
-    // Validate
-    if (!data.id || !Array.isArray(data.messages)) {
-      return null;
-    }
-    return {
-      ...data,
-      messages: deserializeMessages(data.messages),
-    } as unknown as SessionData;
-  } catch {
-    return null;
-  }
+/**
+ * Load a session from the database.
+ */
+export function loadSession(id: string): SessionData | null {
+  const row = dbGetSession(id);
+  if (!row) return null;
+
+  const messages = dbGetMessages(id).map(rowToMessage);
+
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    messages,
+    profile: row.profile ? (JSON.parse(row.profile) as UserProfile) : null,
+    chart: row.chart ? (JSON.parse(row.chart) as BaziChart) : null,
+  };
 }
 
 /**
  * List all saved sessions.
  */
 export function listSessions(): { id: string; updatedAt: string; messageCount: number }[] {
-  const dir = getSessionsDir();
-  if (!existsSync(dir)) return [];
-
-  const result: { id: string; updatedAt: string; messageCount: number }[] = [];
-  const files = readdirSync(dir).filter((f) => f.endsWith('.json'));
-
-  for (const file of files) {
-    try {
-      const raw = readFileSync(join(dir, file), 'utf-8');
-      const data = JSON.parse(raw);
-      result.push({
-        id: data.id || file.replace('.json', ''),
-        updatedAt: data.updatedAt || '',
-        messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
-      });
-    } catch {
-      // skip corrupted
-    }
-  }
-
-  return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return dbListSessions();
 }
 
 /**
  * Delete a saved session.
  */
 export function deleteSession(id: string): boolean {
-  const dir = getSessionsDir();
-  const filepath = join(dir, `${id}.json`);
-  if (existsSync(filepath)) {
-    unlinkSync(filepath);
-    return true;
-  }
-  return false;
+  return dbDeleteSession(id);
 }
+
+/**
+ * Get the underlying database instance for direct access.
+ */
+export { getDb };
