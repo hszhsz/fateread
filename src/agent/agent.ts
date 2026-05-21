@@ -21,11 +21,14 @@ import {
   createTokenTracker,
   recordUsage,
   formatTokenReport,
+  snapshotUsage,
+  diffUsage,
+  formatUsage,
   withRetry,
   extractContent,
   extractReasoning,
 } from '../shared/llm-client.js';
-import type { TokenTracker } from '../shared/llm-client.js';
+import type { TokenTracker, TokenUsage } from '../shared/llm-client.js';
 import {
   saveSession,
   loadSession,
@@ -181,6 +184,7 @@ export class FateReadAgent {
   private debate: boolean;
   private memoryContext = '';
   private returningUserGreeting = '';
+  private lastRoundUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
   constructor(options: AgentOptions = {}) {
     this.client = createLlmClient({
@@ -236,6 +240,9 @@ export class FateReadAgent {
     this.messages.push(userMsg);
     this.persist(userMsg);
 
+    // Snapshot for per-round token tracking
+    const snap = this.tokenTracker ? snapshotUsage(this.tokenTracker) : null;
+
     let iterations = 0;
     let consecutiveNoProgress = 0;
 
@@ -256,6 +263,10 @@ export class FateReadAgent {
         this.messages.push(msg);
         this.persist(msg);
         this.updateSystemPromptIntake();
+        // Compute per-round token usage
+        if (snap && this.tokenTracker) {
+          this.lastRoundUsage = diffUsage(this.tokenTracker, snap);
+        }
         return content;
       }
 
@@ -315,6 +326,11 @@ export class FateReadAgent {
       this.updateSystemPromptIntake();
     }
 
+    // Compute per-round token usage before return
+    if (snap && this.tokenTracker) {
+      this.lastRoundUsage = diffUsage(this.tokenTracker, snap);
+    }
+
     return iterations >= this.maxIterations
       ? '抱歉，处理超时。请尝试重新描述您的问题。'
       : '抱歉，处理过程中遇到问题，请重试。';
@@ -327,6 +343,9 @@ export class FateReadAgent {
     const userMsg: Message = { role: 'user', content: userMessage };
     this.messages.push(userMsg);
     this.persist(userMsg);
+
+    // Snapshot for per-round token tracking
+    const snap = this.tokenTracker ? snapshotUsage(this.tokenTracker) : null;
 
     let iterations = 0;
     let consecutiveNoProgress = 0;
@@ -351,6 +370,10 @@ export class FateReadAgent {
         this.messages.push(msg);
         this.persist(msg);
         this.updateSystemPromptIntake();
+        // Compute per-round token usage
+        if (snap && this.tokenTracker) {
+          this.lastRoundUsage = diffUsage(this.tokenTracker, snap);
+        }
         return;
       }
 
@@ -452,6 +475,11 @@ export class FateReadAgent {
 
       this.updateSystemPromptIntake();
     }
+
+    // Compute per-round token usage before generator ends
+    if (snap && this.tokenTracker) {
+      this.lastRoundUsage = diffUsage(this.tokenTracker, snap);
+    }
   }
 
   /**
@@ -481,6 +509,8 @@ export class FateReadAgent {
       this.memoryContext = '';
       this.returningUserGreeting = '';
     }
+
+    this.lastRoundUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
     const skillCatalog = buildSkillCatalog(this.state.skills);
     const systemPrompt = buildSystemPrompt(this.state, this.memoryContext, this.returningUserGreeting) + '\n\n' + skillCatalog;
@@ -534,6 +564,8 @@ export class FateReadAgent {
       this.memoryContext = '';
       this.returningUserGreeting = '';
     }
+
+    this.lastRoundUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
     const skillCatalog = buildSkillCatalog(this.state.skills);
     const systemPrompt = buildSystemPrompt(this.state, this.memoryContext, this.returningUserGreeting) + '\n\n' + skillCatalog;
@@ -615,6 +647,16 @@ export class FateReadAgent {
 
   getTokenReport(): string {
     return this.tokenTracker ? formatTokenReport(this.tokenTracker) : 'Token 追踪未启用';
+  }
+
+  /** Return per-round token usage (reset each round). */
+  getLastRoundUsage(): TokenUsage {
+    return { ...this.lastRoundUsage };
+  }
+
+  /** Format the last round's token usage as a one-liner. */
+  getLastRoundUsageStr(): string {
+    return formatUsage(this.lastRoundUsage);
   }
 
   // ============================================================

@@ -28,6 +28,8 @@ export interface TokenTracker {
   calls: number;
   /** Per-model breakdown */
   byModel: Record<string, TokenUsage>;
+  /** Most recent call's usage */
+  lastCall: TokenUsage;
 }
 
 // ============================================================
@@ -68,6 +70,7 @@ export function createTokenTracker(): TokenTracker {
     total: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
     calls: 0,
     byModel: {},
+    lastCall: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
   };
 }
 
@@ -76,6 +79,8 @@ export function recordUsage(tracker: TokenTracker, model: string, usage: TokenUs
   tracker.total.completionTokens += usage.completionTokens;
   tracker.total.totalTokens += usage.totalTokens;
   tracker.calls++;
+  // Track per-call usage
+  tracker.lastCall = { ...usage };
 
   if (!tracker.byModel[model]) {
     tracker.byModel[model] = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -95,6 +100,25 @@ export function formatTokenReport(tracker: TokenTracker): string {
     lines.push(`  ${model}: ${usage.totalTokens} tokens (${usage.promptTokens}+${usage.completionTokens})`);
   }
   return lines.join('\n');
+}
+
+/** Snapshot the cumulative tracker state to compute per-round deltas later. */
+export function snapshotUsage(tracker: TokenTracker): TokenUsage {
+  return { ...tracker.total };
+}
+
+/** Compute the delta between a prior snapshot and the current tracker state. */
+export function diffUsage(tracker: TokenTracker, snapshot: TokenUsage): TokenUsage {
+  return {
+    promptTokens: tracker.total.promptTokens - snapshot.promptTokens,
+    completionTokens: tracker.total.completionTokens - snapshot.completionTokens,
+    totalTokens: tracker.total.totalTokens - snapshot.totalTokens,
+  };
+}
+
+/** Format a single TokenUsage as a one-liner. */
+export function formatUsage(usage: TokenUsage): string {
+  return `💰 本轮消耗: ${usage.totalTokens} tokens (输入: ${usage.promptTokens}, 输出: ${usage.completionTokens})`;
 }
 
 // ============================================================

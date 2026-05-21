@@ -692,10 +692,20 @@ async function handleChat(input: string, agent: FateReadAgent, streamMode: boole
 
       stopSpinner();
       process.stdout.write('\n');
+      // Display per-round token usage
+      const usageStr = agent.getLastRoundUsageStr();
+      if (usageStr) {
+        console.log(chalk.dim(usageStr));
+      }
     } else {
       process.stdout.write(chalk.gray('思考中...\n'));
       const response = await agent.chat(input);
       process.stdout.write(`\n${response}\n`);
+      // Display per-round token usage
+      const usageStr = agent.getLastRoundUsageStr();
+      if (usageStr) {
+        console.log(chalk.dim(usageStr));
+      }
     }
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
