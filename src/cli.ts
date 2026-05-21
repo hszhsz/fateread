@@ -21,7 +21,7 @@ import type { StreamEvent } from './agent/agent.js';
 import { paipan, formatChart } from './core/index.js';
 import type { PaipanInput } from './core/types.js';
 import { CITY_LONGITUDE } from './core/solar-time.js';
-import { listSessions, deleteSession } from './shared/session-store.js';
+import { listSessions, deleteSession, exportSessionToFile } from './shared/session-store.js';
 import type { SchoolId } from './agent/schools/types.js';
 import { SCHOOL_NAMES } from './agent/schools/types.js';
 import { getMemories, deleteMemory, getUser } from './shared/memory-store.js';
@@ -62,6 +62,7 @@ const HELP = `
   /load <id>     加载之前保存的会话
   /sessions      列出所有保存的会话
   /tokens        查看 Token 使用统计
+  /export        导出当前会话完整记录到本地 JSON 文件
   /stream        切换流式输出模式（默认开启）
   /quit          退出程序
 
@@ -475,6 +476,18 @@ async function handleCommand(input: string, ctx: CommandContext): Promise<void> 
     return;
   }
 
+  if (cmd === '/export') {
+    sep();
+    const sessionId = parts[1] || agent.getSessionId();
+    const path = exportSessionToFile(sessionId);
+    if (path) {
+      console.log(chalk.green(`\n💾 会话已导出至文件: ${path}\n`));
+    } else {
+      console.log(chalk.yellow(`\n⚠️  导出失败，请检查会话 ID: ${sessionId}\n`));
+    }
+    return;
+  }
+
   if (cmd === '/tokens') {
     sep();
     console.log('\n' + agent.getTokenReport() + '\n');
@@ -484,8 +497,14 @@ async function handleCommand(input: string, ctx: CommandContext): Promise<void> 
   if (cmd === '/save') {
     const customId = parts[1] || undefined;
     const id = agent.saveSession(customId);
+    // Also export to local JSON file
+    const path = exportSessionToFile(id);
     sep();
-    console.log(chalk.green(`\n💾 会话已保存 (ID: ${id})\n`));
+    if (path) {
+      console.log(chalk.green(`\n💾 会话已保存 (ID: ${id})，已导出至: ${path}\n`));
+    } else {
+      console.log(chalk.green(`\n💾 会话已保存 (ID: ${id})\n`));
+    }
     return;
   }
 

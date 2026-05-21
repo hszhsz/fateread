@@ -3,6 +3,9 @@
 // Save/load/resume conversation sessions via SQLite
 // ============================================================
 
+import { writeFileSync, readdirSync, existsSync, mkdirSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import type { BaziChart, UserProfile } from '../core/types.js';
 import type { Message } from '../agent/agent.js';
 import {
@@ -181,3 +184,82 @@ export function deleteSession(id: string): boolean {
  * Get the underlying database instance for direct access.
  */
 export { getDb };
+
+// ============================================================
+// File Export — save session as JSON to local disk
+// ============================================================
+
+function getSessionsDir(): string {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  return resolve(__dirname, '..', '..', 'sessions');
+}
+
+/**
+ * Export a session's full conversation (including reasoning_content)
+ * to a formatted JSON file under the sessions/ directory.
+ * Returns the file path, or null on failure.
+ */
+export function exportSessionToFile(sessionId: string): string | null {
+  try {
+    const data = loadSession(sessionId);
+    if (!data) return null;
+
+    const dir = getSessionsDir();
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+
+    // Build a clean export payload
+    const messages = data.messages.map((msg) => {
+      const entry: Record<string, unknown> = {
+        role: msg.role,
+        content: msg.content,
+      };
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        entry.tool_calls = msg.tool_calls.map((tc) => ({
+          id: tc.id,
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        }));
+      }
+      if (msg.tool_call_id) entry.tool_call_id = msg.tool_call_id;
+      if (msg.name) entry.name = msg.name;
+      if (msg.reasoning_content) entry.reasoning_content = msg.reasoning_content;
+      return entry;
+    });
+
+    const exportPayload = {
+      session_id: data.id,
+      created_at: data.createdAt,
+      updated_at: data.updatedAt,
+      user_id: data.userId,
+      profile: data.profile,
+      chart: data.chart,
+      message_count: messages.length,
+      messages,
+    };
+
+    const filePath = resolve(dir, `${sessionId}.json`);
+    writeFileSync(filePath, JSON.stringify(exportPayload, null, 2), 'utf-8');
+    return filePath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * List exported session files in the sessions/ directory.
+ */
+export function listExportedSessions(): string[] {
+  try {
+    const dir = getSessionsDir();
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f: string) => f.endsWith('.json'))
+      .map((f: string) => f.replace('.json', ''))
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+}

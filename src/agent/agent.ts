@@ -34,6 +34,7 @@ import {
   loadSession,
   generateSessionId,
   appendMessage,
+  exportSessionToFile,
 } from '../shared/session-store.js';
 import type { SessionData } from '../shared/session-store.js';
 import { dbCreateSession, dbUpdateSession } from '../shared/database.js';
@@ -669,6 +670,12 @@ export class FateReadAgent {
   private finalizeSession(): void {
     // Save session with current data
     saveSession(this.sessionId, this.messages, this.state.profile, this.state.chart, this.state.userId);
+
+    // Export full conversation (including reasoning_content) to local JSON file
+    const exportedPath = exportSessionToFile(this.sessionId);
+    if (exportedPath) {
+      console.log(`💾 会话已导出至文件: ${exportedPath}`);
+    }
 
     // Add a session summary memory if we have a user
     if (this.state.userId) {
